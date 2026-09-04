@@ -94,16 +94,21 @@ export default function ChatScreenWeb() {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
       document.title = 'Messenger-ko Karl & Lezil 𓍯𓂃𓏧♡💫👀💞🫶';
       try {
-        let link = document.querySelector("link[rel*='icon']");
-        if (!link) {
-          link = document.createElement('link');
-          link.rel = 'shortcut icon';
-          document.getElementsByTagName('head')[0].appendChild(link);
-        }
-        link.href = '/favicon.png';
-      } catch (e) {
-        // Fallback
-      }
+        const existingLinks = document.querySelectorAll("link[rel*='icon']");
+        existingLinks.forEach((el) => el.remove());
+
+        const linkPng = document.createElement('link');
+        linkPng.rel = 'icon';
+        linkPng.type = 'image/png';
+        linkPng.href = '/favicon.png';
+        document.head.appendChild(linkPng);
+
+        const linkIco = document.createElement('link');
+        linkIco.rel = 'shortcut icon';
+        linkIco.type = 'image/x-icon';
+        linkIco.href = '/favicon.ico';
+        document.head.appendChild(linkIco);
+      } catch (e) {}
     }
 
     // Fetch auth user & saved settings

@@ -1,5 +1,6 @@
 import os
-from PIL import Image, ImageDraw, ImageFont
+import shutil
+from PIL import Image, ImageDraw
 
 def draw_speech_bubble_icon(size):
     img = Image.new('RGBA', (size, size), (0, 0, 0, 0))
@@ -13,7 +14,6 @@ def draw_speech_bubble_icon(size):
     draw.ellipse(circle_box, fill=(0, 132, 255, 255))
     
     # Draw white speech bubble inside
-    # Main bubble rectangle
     b_left = int(size * 0.22)
     b_top = int(size * 0.25)
     b_right = int(size * 0.78)
@@ -44,14 +44,22 @@ def draw_speech_bubble_icon(size):
     return img
 
 if __name__ == '__main__':
-    assets_dir = r'c:\Users\karln\OneDrive\Desktop\MessengerApp\assets'
+    base_dir = r'c:\Users\karln\OneDrive\Desktop\MessengerApp'
+    dirs = [
+        os.path.join(base_dir, 'assets'),
+        os.path.join(base_dir, 'public'),
+        os.path.join(base_dir, 'dist'),
+    ]
     
-    icon_512 = draw_speech_bubble_icon(512)
-    icon_512.save(os.path.join(assets_dir, 'icon.png'))
-    
-    favicon_64 = draw_speech_bubble_icon(64)
-    favicon_64.save(os.path.join(assets_dir, 'favicon.png'))
-    
-    # Save .ico format containing 16x16, 32x32, 48x48, 64x64
-    favicon_64.save(os.path.join(assets_dir, 'favicon.ico'), format='ICO', sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
-    print("Favicon files generated successfully in assets!")
+    for d in dirs:
+        os.makedirs(d, exist_ok=True)
+        
+        icon_512 = draw_speech_bubble_icon(512)
+        icon_512.save(os.path.join(d, 'icon.png'))
+        
+        favicon_64 = draw_speech_bubble_icon(64)
+        favicon_64.save(os.path.join(d, 'favicon.png'))
+        
+        favicon_64.save(os.path.join(d, 'favicon.ico'), format='ICO', sizes=[(16, 16), (32, 32), (48, 48), (64, 64)])
+
+    print("Custom Messenger Favicons generated and synced across assets, public, and dist!")
