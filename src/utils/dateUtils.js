@@ -62,11 +62,40 @@ export function shouldShowDateHeader(currentMsgDate, olderMsgDate) {
   if (isNaN(curr.getTime()) || isNaN(prev.getTime())) return false;
 
   // Show header if messages are more than 20 minutes apart or on different days
-  const diffMinutes = Math.abs((curr.getTime() - prev.getTime()) / (1000 * 60));
   const isDifferentDay =
     curr.getFullYear() !== prev.getFullYear() ||
     curr.getMonth() !== prev.getMonth() ||
     curr.getDate() !== prev.getDate();
 
+  const diffMinutes = Math.abs((curr.getTime() - prev.getTime()) / (1000 * 60));
   return isDifferentDay || diffMinutes > 20;
+}
+
+/**
+ * Format last active relative time string (e.g. "Active 5m ago", "Active 2h ago", "Active yesterday")
+ */
+export function formatLastActiveTime(dateOrTimestamp) {
+  if (!dateOrTimestamp) return 'Offline';
+  const date = new Date(dateOrTimestamp);
+  if (isNaN(date.getTime())) return 'Offline';
+
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  if (diffMs < 0) return 'Active just now';
+
+  const diffMinutes = Math.floor(diffMs / (1000 * 60));
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+  if (diffMinutes < 1) {
+    return 'Active just now';
+  } else if (diffMinutes < 60) {
+    return `Active ${diffMinutes}m ago`;
+  } else if (diffHours < 24) {
+    return `Active ${diffHours}h ago`;
+  } else if (diffDays === 1) {
+    return `Active yesterday`;
+  } else {
+    return `Active ${diffDays}d ago`;
+  }
 }

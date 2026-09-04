@@ -27,6 +27,7 @@ import {
   formatMessageTime,
   getDateDividerLabel,
   shouldShowDateHeader,
+  formatLastActiveTime,
 } from '../utils/dateUtils';
 import {
   getSavedNicknames,
@@ -39,8 +40,10 @@ import {
   sendOrQueueMessage,
   startOfflineSyncLoop,
 } from '../services/offlineSyncService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+const LAST_SEEN_KEY = '@messenger_partner_last_seen';
 
 export default function ChatScreenWeb() {
   const [messages, setMessages] = useState([]);
@@ -54,6 +57,8 @@ export default function ChatScreenWeb() {
 
   // Online Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
+  const [partnerLastActive, setPartnerLastActive] = useState(null);
+  const [, setTick] = useState(0);
 
   // Theme & Background States
   const [currentThemeId, setCurrentThemeId] = useState('classic');
@@ -185,6 +190,16 @@ export default function ChatScreenWeb() {
     };
   }, []);
 
+  // Load saved last active timestamp & set ticker interval
+  useEffect(() => {
+    AsyncStorage.getItem(LAST_SEEN_KEY).then((saved) => {
+      if (saved) setPartnerLastActive(saved);
+    });
+
+    const ticker = setInterval(() => setTick((t) => t + 1), 15000);
+    return () => clearInterval(ticker);
+  }, []);
+
   // Supabase Realtime Presence Channel for Online/Offline Status
   useEffect(() => {
     if (!userEmail) return;
@@ -198,6 +213,15 @@ export default function ChatScreenWeb() {
         const state = presenceChannel.presenceState();
         const activeKeys = Object.keys(state);
         setOnlineUsers(activeKeys);
+
+        // Track partner last active time
+        const partnerKey = activeKeys.find((k) => k !== userEmail);
+        if (partnerKey && state[partnerKey] && state[partnerKey].length > 0) {
+          const meta = state[partnerKey][0];
+          const time = meta.online_at || new Date().toISOString();
+          setPartnerLastActive(time);
+          AsyncStorage.setItem(LAST_SEEN_KEY, time);
+        }
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -585,7 +609,11 @@ export default function ChatScreenWeb() {
                 Messenger-ko Karl & Lezil 𓍯...
               </Text>
               <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : '#888' }]}>
-                {isPartnerOnline ? '🟢 Online Now' : '⚪ Offline'}
+                {isPartnerOnline
+                  ? '🟢 Active now'
+                  : partnerLastActive
+                  ? `⚪ ${formatLastActiveTime(partnerLastActive)}`
+                  : '⚪ Offline'}
               </Text>
             </View>
           </View>
