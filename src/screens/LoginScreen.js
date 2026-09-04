@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -17,6 +17,24 @@ export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const emailRef = useRef(null);
+  const passwordRef = useRef(null);
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.title = 'Messenger-ko Karl & Lezil 𓍯𓂃𓏧♡💫👀💞🫶';
+      try {
+        let link = document.querySelector("link[rel*='icon']");
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'shortcut icon';
+          document.getElementsByTagName('head')[0].appendChild(link);
+        }
+        link.href = '/favicon.png';
+      } catch (e) {}
+    }
+  }, []);
 
   const handleLogin = async () => {
     if (!email.trim() || !password.trim()) {
@@ -46,10 +64,10 @@ export default function LoginScreen({ navigation }) {
         {/* Logo area */}
         <View style={styles.logoArea}>
           <View style={styles.logoCircle}>
-            <Text style={styles.logoIcon}>💬</Text>
+            <Text style={styles.logoIcon}>⚡</Text>
           </View>
-          <Text style={styles.appName}>Messenger-ko</Text>
-          <Text style={styles.tagline}>Connected with you, anywhere</Text>
+          <Text style={styles.appName}>Messenger-ko Karl & Lezil</Text>
+          <Text style={styles.tagline}>Connected with you, anywhere 💖</Text>
         </View>
 
         {/* Card */}
@@ -59,6 +77,7 @@ export default function LoginScreen({ navigation }) {
           <View style={styles.inputWrapper}>
             <Text style={styles.label}>Email</Text>
             <TextInput
+              ref={emailRef}
               style={styles.input}
               placeholder="you@example.com"
               placeholderTextColor="#aaa"
@@ -67,18 +86,24 @@ export default function LoginScreen({ navigation }) {
               autoCapitalize="none"
               keyboardType="email-address"
               autoCorrect={false}
+              returnKeyType="next"
+              onSubmitEditing={() => passwordRef.current?.focus()}
+              blurOnSubmit={false}
             />
           </View>
 
           <View style={styles.inputWrapper}>
             <Text style={styles.label}>Password</Text>
             <TextInput
+              ref={passwordRef}
               style={styles.input}
               placeholder="••••••••"
               placeholderTextColor="#aaa"
               value={password}
               onChangeText={setPassword}
               secureTextEntry
+              returnKeyType="go"
+              onSubmitEditing={handleLogin}
             />
           </View>
 
@@ -117,30 +142,32 @@ const styles = StyleSheet.create({
     marginBottom: 32,
   },
   logoCircle: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#007AFF',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    backgroundColor: '#0084ff',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 16,
-    shadowColor: '#007AFF',
+    shadowColor: '#0084ff',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.35,
     shadowRadius: 12,
     elevation: 8,
   },
-  logoIcon: { fontSize: 36 },
+  logoIcon: { fontSize: 44, color: '#fff' },
   appName: {
-    fontSize: 30,
+    fontSize: 26,
     fontWeight: '800',
     color: '#1a1a2e',
     letterSpacing: 0.5,
+    textAlign: 'center',
   },
   tagline: {
     marginTop: 6,
     fontSize: 14,
     color: '#666',
+    fontWeight: '500',
   },
   card: {
     backgroundColor: '#fff',
@@ -179,12 +206,12 @@ const styles = StyleSheet.create({
     color: '#1a1a2e',
   },
   button: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#0084ff',
     borderRadius: 14,
     paddingVertical: 15,
     alignItems: 'center',
     marginTop: 8,
-    shadowColor: '#007AFF',
+    shadowColor: '#0084ff',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -197,15 +224,15 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
- footerLink: {
-  alignItems: 'center',
+  footerLink: {
+    alignItems: 'center',
   },
   footerText: {
     fontSize: 15,
     color: '#666',
   },
   footerHighlight: {
-    color: '#007AFF',
+    color: '#0084ff',
     fontWeight: '700',
   },
 });

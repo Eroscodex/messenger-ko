@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { View, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { TouchableOpacity, Text, Alert } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { supabase } from './src/config/supabase';
 
@@ -9,6 +9,7 @@ import LoginScreen from './src/screens/LoginScreen';
 import ChatScreen from './src/screens/ChatScreen';
 
 const Stack = createNativeStackNavigator();
+const ContainerView = Platform.OS === 'web' ? View : GestureHandlerRootView;
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -25,39 +26,21 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) Alert.alert('Logout Error', error.message);
-  };
-
   return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-    <NavigationContainer>
-      <Stack.Navigator>
-        {!session ? (
-          // Auth Stack
-          <>
+    <ContainerView style={{ flex: 1 }}>
+      <NavigationContainer>
+        <Stack.Navigator>
+          {!session ? (
             <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
-          </>
-        ) : (
-          // Main Stack
-          <>
-            <Stack.Screen 
-              name="Chat" 
-              component={ChatScreen} 
-              options={{
-                title: 'Messenger-ko Love𓍯𓂃𓏧♡💫👀💞🫶',
-                headerRight: () => (
-                  <TouchableOpacity onPress={handleLogout} style={{ marginRight: 10 }}>
-                    <Text style={{ color: '#007AFF', fontSize: 16 }}>Logout</Text>
-                  </TouchableOpacity>
-                ),
-              }}
+          ) : (
+            <Stack.Screen
+              name="Chat"
+              component={ChatScreen}
+              options={{ headerShown: false }}
             />
-          </>
-        )}
-      </Stack.Navigator>
-    </NavigationContainer>
-    </GestureHandlerRootView>
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </ContainerView>
   );
 }
