@@ -5,6 +5,7 @@ const CACHED_MESSAGES_KEY = '@messenger_cached_messages';
 const PENDING_QUEUE_KEY = '@messenger_pending_queue';
 
 let syncIntervalId = null;
+let activeSyncProgressCallback = null;
 let isSyncing = false;
 
 /**
@@ -62,7 +63,7 @@ export async function setPendingQueue(queue) {
  * 3. Enqueues to pending queue
  * 4. Triggers background flush attempt immediately
  */
-export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 'text', userEmail, activeChatEmail = 'lezil@messenger.app' }) {
+export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 'text', userEmail }) {
   const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
   const timestamp = new Date().toISOString();
 
@@ -70,12 +71,11 @@ export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 't
     id: tempId,
     temp_id: tempId,
     text: text ? text.trim() : '',
-    media_url: mediaUrl,
-    media_type: mediaType,
-    sender_email: userEmail,
-    receiver_email: activeChatEmail,
+    user_email: userEmail || 'user@messenger.app',
+    image_url: mediaUrl,
+    video_url: null,
     created_at: timestamp,
-    status: 'pending', // 'pending' | 'syncing' | 'sent' | 'failed'
+    status: 'pending', // 'pending' | 'syncing' | 'sent'
   };
 
   // 1. Update local cached messages
@@ -89,7 +89,7 @@ export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 't
   await setPendingQueue(pendingQueue);
 
   // 3. Attempt immediate sync in background
-  flushPendingQueue();
+  flushPendingQueue(activeSyncProgressCallback);
 
   return { localMessage: newMessage, allMessages: updated };
 }
@@ -98,6 +98,8 @@ export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 't
  * Attempt to flush all items in the pending queue to Supabase
  */
 export async function flushPendingQueue(onSyncProgress) {
+  if (onSyncProgress) activeSyncProgressCallback = onSyncProgress;
+
   if (isSyncing) return;
   isSyncing = true;
 
@@ -105,14 +107,14 @@ export async function flushPendingQueue(onSyncProgress) {
     let pendingQueue = await getPendingQueue();
     if (!pendingQueue || pendingQueue.length === 0) {
       isSyncing = false;
-      if (onSyncProgress) onSyncProgress({ isSyncing: false, remaining: 0 });
+      if (activeSyncProgressCallback) activeSyncProgressCallback({ isSyncing: false, remaining: 0 });
       return;
     }
 
     let cachedMessages = await getCachedMessages();
     let remainingQueue = [];
 
-    if (onSyncProgress) onSyncProgress({ isSyncing: true, remaining: pendingQueue.length });
+    if (activeSyncProgressCallback) activeSyncProgressCallback({ isSyncing: true, remaining: pendingQueue.length });
 
     for (const item of pendingQueue) {
       try {
@@ -121,18 +123,15 @@ export async function flushPendingQueue(onSyncProgress) {
           (m.id === item.id || m.temp_id === item.temp_id) ? { ...m, status: 'syncing' } : m
         );
         await setCachedMessages(cachedMessages);
-        if (onSyncProgress) onSyncProgress({ isSyncing: true, remaining: remainingQueue.length + 1 });
+        if (activeSyncProgressCallback) activeSyncProgressCallback({ isSyncing: true, remaining: remainingQueue.length });
 
-        // Push ultra-compact message payload to Supabase
+        // Correct Supabase database payload matching schema: { text, user_email, image_url, video_url }
         const payload = {
           text: item.text || '',
-          sender_email: item.sender_email,
-          receiver_email: item.receiver_email || 'lezil@messenger.app',
-          created_at: item.created_at || new Date().toISOString(),
+          user_email: item.user_email || item.sender_email || item.userEmail || 'user@messenger.app',
+          image_url: item.image_url || item.media_url || null,
+          video_url: item.video_url || null,
         };
-
-        if (item.media_url) payload.media_url = item.media_url;
-        if (item.media_type) payload.media_type = item.media_type;
 
         const { data, error } = await supabase
           .from('messages')
@@ -142,7 +141,6 @@ export async function flushPendingQueue(onSyncProgress) {
 
         if (error) {
           console.warn('Sync failed for item (re-queuing):', item.id, error.message);
-          // Keep in remaining queue with status failed/pending
           remainingQueue.push({ ...item, status: 'pending' });
           cachedMessages = cachedMessages.map((m) =>
             (m.id === item.id || m.temp_id === item.temp_id) ? { ...m, status: 'pending' } : m
@@ -151,6 +149,7 @@ export async function flushPendingQueue(onSyncProgress) {
           // Success! Replace temp item with synced server item
           const syncedMessage = {
             ...data,
+            id: String(data.id),
             status: 'sent',
           };
           cachedMessages = cachedMessages.map((m) =>
@@ -169,8 +168,8 @@ export async function flushPendingQueue(onSyncProgress) {
     await setCachedMessages(cachedMessages);
     await setPendingQueue(remainingQueue);
 
-    if (onSyncProgress) {
-      onSyncProgress({
+    if (activeSyncProgressCallback) {
+      activeSyncProgressCallback({
         isSyncing: false,
         remaining: remainingQueue.length,
       });
@@ -183,9 +182,10 @@ export async function flushPendingQueue(onSyncProgress) {
 }
 
 /**
- * Start periodic sync loop (e.g. check every 4 seconds for connectivity blips)
+ * Start periodic sync loop and attach browser online listeners
  */
-export function startOfflineSyncLoop(onSyncProgress, intervalMs = 4000) {
+export function startOfflineSyncLoop(onSyncProgress, intervalMs = 3000) {
+  activeSyncProgressCallback = onSyncProgress;
   if (syncIntervalId) clearInterval(syncIntervalId);
 
   // Trigger initial flush
@@ -195,10 +195,22 @@ export function startOfflineSyncLoop(onSyncProgress, intervalMs = 4000) {
     flushPendingQueue(onSyncProgress);
   }, intervalMs);
 
+  // Browser online listener
+  let handleOnline = null;
+  if (typeof window !== 'undefined' && window.addEventListener) {
+    handleOnline = () => {
+      flushPendingQueue(onSyncProgress);
+    };
+    window.addEventListener('online', handleOnline);
+  }
+
   return () => {
     if (syncIntervalId) {
       clearInterval(syncIntervalId);
       syncIntervalId = null;
+    }
+    if (handleOnline && typeof window !== 'undefined' && window.removeEventListener) {
+      window.removeEventListener('online', handleOnline);
     }
   };
 }
