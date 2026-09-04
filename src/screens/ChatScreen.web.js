@@ -413,6 +413,12 @@ export default function ChatScreenWeb() {
   const otherUsersOnline = onlineUsers.filter((u) => u !== userEmail);
   const isPartnerOnline = otherUsersOnline.length > 0;
 
+  // Resolve Partner Details for Header
+  const isLezilUser = userEmail && userEmail.toLowerCase().includes('lezil');
+  const partnerEmail = isLezilUser ? 'karl@messenger.app' : 'lezil@messenger.app';
+  const partnerDisplayName = getDisplayName(partnerEmail, nicknames);
+  const partnerInitial = partnerDisplayName.charAt(0).toUpperCase();
+
   const renderItem = ({ item, index }) => {
     const mine = item.userEmail === userEmail;
     const olderItem = messages[index + 1];
@@ -494,8 +500,12 @@ export default function ChatScreenWeb() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(33, 150, 243, 0.25)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
                           <Text style={{ fontSize: 10, color: '#64b5f6', fontWeight: '600' }}>⚡ Syncing</Text>
                         </View>
+                      ) : isPartnerOnline || (partnerLastActive && new Date(partnerLastActive).getTime() >= item.createdAt.getTime()) ? (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 255, 255, 0.3)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
+                          <Text style={{ fontSize: 10, color: '#ffffff', fontWeight: '800' }}>👀 Seen</Text>
+                        </View>
                       ) : (
-                        <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>✓✓</Text>
+                        <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>✓✓ Sent</Text>
                       )}
                     </View>
                   )}
@@ -600,13 +610,13 @@ export default function ChatScreenWeb() {
         {/* Integrated Header Bar */}
         <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
           <View style={styles.headerLeft}>
-            <View style={styles.avatarHeader}>
-              <Text style={styles.avatarHeaderText}>⚡</Text>
+            <View style={[styles.avatarHeader, { backgroundColor: theme.accent }]}>
+              <Text style={styles.avatarHeaderText}>{partnerInitial}</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
               <Text style={[styles.headerTitle, { color: theme.headerText }]} numberOfLines={1}>
-                Messenger-ko Karl & Lezil 𓍯...
+                {partnerDisplayName}
               </Text>
               <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : '#888' }]}>
                 {isPartnerOnline
@@ -879,15 +889,16 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 4, minWidth: 0 },
   avatarHeader: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     backgroundColor: '#0084ff',
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
+    marginRight: 4,
   },
-  avatarHeaderText: { fontSize: 14 },
+  avatarHeaderText: { fontSize: 16, fontWeight: '800', color: '#ffffff' },
   onlineDot: {
     width: 9,
     height: 9,
