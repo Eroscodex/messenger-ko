@@ -89,6 +89,14 @@ export default function ChatScreenWeb() {
     status: msg.status || 'sent',
   });
 
+  const sortMessages = (list) => {
+    const map = new Map();
+    (list || []).forEach((m) => {
+      if (m && m.id) map.set(m.id, m);
+    });
+    return Array.from(map.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  };
+
   useEffect(() => {
     // Set Document Title & Official Messenger ⚡ Favicon on Web
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -133,7 +141,7 @@ export default function ChatScreenWeb() {
     // 1. Initial Local Cache Load
     getCachedMessages().then((cached) => {
       if (cached && cached.length > 0) {
-        setMessages(cached.map(formatMessage).reverse());
+        setMessages(sortMessages(cached.map(formatMessage)));
       }
       fetchMessages();
     });
@@ -143,7 +151,7 @@ export default function ChatScreenWeb() {
       setSyncProgress(progress);
       getCachedMessages().then((cached) => {
         if (cached && cached.length > 0) {
-          setMessages(cached.map(formatMessage).reverse());
+          setMessages(sortMessages(cached.map(formatMessage)));
         }
       });
     }, 4000);
@@ -157,11 +165,8 @@ export default function ChatScreenWeb() {
         (payload) => {
           const newFormatted = formatMessage(payload.new);
           setMessages((prev) => {
-            const exists = prev.some((m) => m.id === newFormatted.id || m.id === payload.new.temp_id);
-            if (exists) {
-              return prev.map((m) => (m.id === newFormatted.id || m.id === payload.new.temp_id ? newFormatted : m));
-            }
-            return [newFormatted, ...prev];
+            const filtered = prev.filter((m) => m.id !== newFormatted.id && m.id !== payload.new.temp_id);
+            return sortMessages([newFormatted, ...filtered]);
           });
         }
       )
@@ -221,7 +226,7 @@ export default function ChatScreenWeb() {
       }
       if (data) {
         const formatted = data.map(formatMessage);
-        setMessages(formatted);
+        setMessages(sortMessages(formatted));
         setCachedMessages(data);
       }
     } catch (e) {
@@ -245,7 +250,7 @@ export default function ChatScreenWeb() {
         text: textToSend,
         userEmail: userEmail || 'web-user',
       });
-      setMessages(allMessages.map(formatMessage).reverse());
+      setMessages(sortMessages(allMessages.map(formatMessage)));
     } catch (e) {
       console.error('Web Send error:', e);
     } finally {
@@ -815,8 +820,19 @@ export default function ChatScreenWeb() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  container: { flex: 1 },
+  safeArea: { flex: 1, backgroundColor: '#f0f2f7' },
+  container: {
+    flex: 1,
+    width: '100%',
+    maxWidth: 720,
+    alignSelf: 'center',
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 16,
+    elevation: 5,
+  },
   bgImage: { flex: 1 },
   bgOverlay: { flex: 1, backgroundColor: 'rgba(255, 255, 255, 0.45)' },
   chatWrapper: { flex: 1 },

@@ -95,6 +95,14 @@ export default function ChatScreen() {
     status: msg.status || 'sent',
   });
 
+  const sortMessages = (list) => {
+    const map = new Map();
+    (list || []).forEach((m) => {
+      if (m && m.id) map.set(m.id, m);
+    });
+    return Array.from(map.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  };
+
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user?.email) setUserEmail(user.email);
@@ -117,7 +125,7 @@ export default function ChatScreen() {
     // 1. Initial Local Cache Load
     getCachedMessages().then((cached) => {
       if (cached && cached.length > 0) {
-        setMessages(cached.map(formatMessage).reverse());
+        setMessages(sortMessages(cached.map(formatMessage)));
       }
       fetchMessages();
     });
@@ -127,7 +135,7 @@ export default function ChatScreen() {
       setSyncProgress(progress);
       getCachedMessages().then((cached) => {
         if (cached && cached.length > 0) {
-          setMessages(cached.map(formatMessage).reverse());
+          setMessages(sortMessages(cached.map(formatMessage)));
         }
       });
     }, 4000);
@@ -140,11 +148,8 @@ export default function ChatScreen() {
         (payload) => {
           const newFormatted = formatMessage(payload.new);
           setMessages((prev) => {
-            const exists = prev.some((m) => m.id === newFormatted.id || m.id === payload.new.temp_id);
-            if (exists) {
-              return prev.map((m) => (m.id === newFormatted.id || m.id === payload.new.temp_id ? newFormatted : m));
-            }
-            return [newFormatted, ...prev];
+            const filtered = prev.filter((m) => m.id !== newFormatted.id && m.id !== payload.new.temp_id);
+            return sortMessages([newFormatted, ...filtered]);
           });
         }
       )
@@ -205,7 +210,7 @@ export default function ChatScreen() {
       }
       if (data) {
         const formatted = data.map(formatMessage);
-        setMessages(formatted);
+        setMessages(sortMessages(formatted));
         setCachedMessages(data);
       }
     } catch (e) {
@@ -229,7 +234,7 @@ export default function ChatScreen() {
         text: textToSend,
         userEmail: userEmail || 'user@messenger.app',
       });
-      setMessages(allMessages.map(formatMessage).reverse());
+      setMessages(sortMessages(allMessages.map(formatMessage)));
     } catch (e) {
       console.error('Send error:', e);
     } finally {
