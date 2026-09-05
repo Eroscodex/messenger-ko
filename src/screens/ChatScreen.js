@@ -43,7 +43,6 @@ import {
   getCachedMessages,
   setCachedMessages,
   sendOrQueueMessage,
-  startOfflineSyncLoop,
 } from '../services/offlineSyncService';
 import {
   getBlockedUsers,
@@ -77,9 +76,6 @@ export default function ChatScreen() {
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
   const [addFriendInput, setAddFriendInput] = useState('');
-
-  // Offline Sync State
-  const [syncProgress, setSyncProgress] = useState({ isSyncing: false, remaining: 0 });
 
   // Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
@@ -174,16 +170,6 @@ export default function ChatScreen() {
       fetchMessages();
     });
 
-    // 2. Start Offline Auto-Sync Loop
-    const stopSyncLoop = startOfflineSyncLoop((progress) => {
-      setSyncProgress(progress);
-      getCachedMessages().then((cached) => {
-        if (cached && cached.length > 0) {
-          setMessages(cached.map(formatMessage).reverse());
-        }
-      });
-    }, 4000);
-
     const channel = supabase
       .channel('chat:messages_v4')
       .on(
@@ -221,7 +207,6 @@ export default function ChatScreen() {
       .subscribe();
 
     return () => {
-      stopSyncLoop();
       supabase.removeChannel(channel);
     };
   }, []);
@@ -1039,25 +1024,6 @@ export default function ChatScreen() {
             )}
           </TouchableOpacity>
         </View>
-
-        {/* Piso Wi-Fi / Low Data Offline Sync Banner */}
-        {syncProgress.remaining > 0 ? (
-          <View style={[styles.syncBanner, { backgroundColor: syncProgress.isSyncing ? '#0288d1' : '#e65100' }]}>
-            <Ionicons name={syncProgress.isSyncing ? 'sync-outline' : 'wifi-outline'} size={13} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.syncBannerText} numberOfLines={1}>
-              {syncProgress.isSyncing
-                ? `Syncing ${syncProgress.remaining} offline message${syncProgress.remaining > 1 ? 's' : ''}...`
-                : `Piso Wi-Fi Offline — ${syncProgress.remaining} queued`}
-            </Text>
-          </View>
-        ) : (
-          <View style={[styles.syncBanner, { backgroundColor: '#2e7d32' }]}>
-            <Ionicons name="shield-checkmark-outline" size={13} color="#fff" style={{ marginRight: 6 }} />
-            <Text style={styles.syncBannerText} numberOfLines={1}>
-              Piso Wi-Fi Data-Saver Active — Low Bandwidth Ready
-            </Text>
-          </View>
-        )}
 
         {/* Render Tab View */}
         {activeTab === 'people' ? (
