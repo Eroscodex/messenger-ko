@@ -181,24 +181,41 @@ export const getFriendsList = async () => {
   }
 };
 
-// --- GROUP CHATS (local storage) ---
+// --- GROUP CHATS (Supabase-backed, shared across devices) ---
 export const getGroupChats = async () => {
-  const list = await getItem(GROUP_CHATS_KEY);
-  return Array.isArray(list) ? list : [];
+  try {
+    const { data, error } = await supabase.rpc('get_my_groups');
+    if (error) throw error;
+    return (data || []).map((group) => ({
+      id: group.group_id,
+      name: group.group_name,
+      members: group.members || [],
+      createdAt: group.group_created_at,
+    }));
+  } catch (e) {
+    console.warn('getGroupChats error:', e.message);
+    return [];
+  }
 };
 
 export const createGroupChat = async (groupName, members = []) => {
   if (!groupName) return null;
-  const current = await getGroupChats();
-  const newGroup = {
-    id: `group_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-    name: groupName.trim(),
-    members: members.map((m) => m.trim().toLowerCase()),
-    createdAt: new Date().toISOString(),
-  };
-  const updated = [newGroup, ...current];
-  await setItem(GROUP_CHATS_KEY, updated);
-  return newGroup;
+  try {
+    const { data, error } = await supabase.rpc('create_group_chat', {
+      p_name: groupName.trim(),
+      p_members: members.map((member) => member.trim().toLowerCase()),
+    });
+    if (error) throw error;
+    return {
+      id: data.id,
+      name: data.name,
+      members: members.map((member) => member.trim().toLowerCase()),
+      createdAt: data.created_at,
+    };
+  } catch (e) {
+    console.error('createGroupChat error:', e.message);
+    return null;
+  }
 };
 
 // --- DIRECT CHATS (1-on-1, local index for sidebar) ---

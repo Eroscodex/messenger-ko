@@ -453,6 +453,10 @@ export default function ChatScreenWeb() {
       .filter((m) => m.length > 0);
 
     const newGroup = await createGroupChat(groupNameInput, membersList);
+    if (!newGroup) {
+      Alert.alert('Group Error', 'Run migration_groups.sql in Supabase, then try again.');
+      return;
+    }
     const updated = await getGroupChats();
     setGroupChats(updated);
     setActiveRoom({ type: 'group', id: newGroup.id, name: `👥 ${newGroup.name}` });
