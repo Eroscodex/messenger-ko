@@ -38,10 +38,12 @@ export default function ResetPasswordScreen({ navigation }) {
     }
     setLoading(true);
 
+    const redirectUrl = typeof window !== 'undefined' && window.location?.origin && !window.location.origin.includes('localhost')
+      ? `${window.location.origin}`
+      : 'https://messenger-ko.netlify.app';
+
     const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
-      redirectTo: Platform.OS === 'web' && typeof window !== 'undefined'
-        ? `${window.location.origin}/reset-password`
-        : undefined,
+      redirectTo: redirectUrl,
     });
 
     if (error) {

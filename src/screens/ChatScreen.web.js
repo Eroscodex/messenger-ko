@@ -303,6 +303,25 @@ export default function ChatScreenWeb() {
     setMessages((prev) => prev.filter((msg) => msg.id !== id));
   };
 
+  const handleClearAllMessages = async () => {
+    const confirmClear = typeof window !== 'undefined' && window.confirm ? window.confirm('Mabubura ang lahat ng chat messages. Sigurado ka ba?') : true;
+    if (!confirmClear) return;
+
+    try {
+      const { error } = await supabase.from('messages').delete().gt('created_at', '1970-01-01T00:00:00Z');
+      if (error) {
+        Alert.alert('Error', error.message);
+        return;
+      }
+      await setCachedMessages([]);
+      setMessages([]);
+      setIsRoomModalVisible(false);
+      Alert.alert('Success', 'Nalinis na ang lahat ng chat messages!');
+    } catch (err) {
+      Alert.alert('Error', err.message || 'Failed to clear messages');
+    }
+  };
+
   const pickImageWeb = () => {
     if (typeof document === 'undefined') return;
     const input = document.createElement('input');
@@ -770,6 +789,17 @@ export default function ChatScreenWeb() {
         inverted
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={{ transform: [{ scaleY: -1 }], alignItems: 'center', justifyContent: 'center', paddingVertical: 50, paddingHorizontal: 20 }}>
+            <Text style={{ fontSize: 44, marginBottom: 12 }}>💬</Text>
+            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.dateHeaderText, textAlign: 'center' }}>
+              Wala pang ka-chat!
+            </Text>
+            <Text style={{ fontSize: 13, color: theme.dateHeaderText, opacity: 0.7, textAlign: 'center', marginTop: 4 }}>
+              Mag-add ng kaibigan sa "People 👥" tab o mag-send ng mensahe para magsimula.
+            </Text>
+          </View>
+        }
       />
 
       <View style={[styles.composer, { backgroundColor: theme.composerBg, borderTopColor: theme.inputBorder }]}>
@@ -1027,6 +1057,13 @@ export default function ChatScreenWeb() {
                   }}
                 >
                   <Text style={{ color: '#e53935', fontWeight: '700', fontSize: 14 }}>🚫 Manage Blocked Users ({blockedUsers.length})</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.blockManagerBtn, { backgroundColor: '#ffebee', marginTop: 10 }]}
+                  onPress={handleClearAllMessages}
+                >
+                  <Text style={{ color: '#d32f2f', fontWeight: '700', fontSize: 14 }}>🧹 Clear All Chat History</Text>
                 </TouchableOpacity>
               </ScrollView>
             </View>
