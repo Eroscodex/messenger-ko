@@ -7,6 +7,7 @@ import { supabase } from './src/config/supabase';
 
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';
+import ResetPasswordScreen from './src/screens/ResetPasswordScreen';
 import ChatScreen from './src/screens/ChatScreen';
 
 const Stack = createNativeStackNavigator();
@@ -49,10 +50,11 @@ export default function App() {
       <NavigationContainer>
         <Stack.Navigator>
           {!session ? (
-            // Auth Stack (Login & Register screens)
+            // Auth Stack (Login, Register & Reset Password screens)
             <>
               <Stack.Screen name="Login" component={LoginScreen} options={{ headerShown: false }} />
               <Stack.Screen name="Register" component={RegisterScreen} options={{ headerShown: false }} />
+              <Stack.Screen name="ResetPassword" component={ResetPasswordScreen} options={{ headerShown: false }} />
             </>
           ) : (
             // Main App Stack

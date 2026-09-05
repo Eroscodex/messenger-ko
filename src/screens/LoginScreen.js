@@ -145,7 +145,12 @@ export default function LoginScreen({ navigation }) {
           </View>
 
           <View style={styles.inputWrapper}>
-            <Text style={styles.label}>Password</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <Text style={styles.label}>Password</Text>
+              <TouchableOpacity onPress={() => navigation.navigate('ResetPassword')} disabled={loading}>
+                <Text style={{ fontSize: 12, color: '#0084ff', fontWeight: '600' }}>Forgot Password?</Text>
+              </TouchableOpacity>
+            </View>
             <TextInput
               ref={passwordRef}
               style={styles.input}

@@ -53,6 +53,11 @@ import {
   createGroupChat,
   getDirectChats,
   addDirectChat,
+  getFriendRequests,
+  sendFriendRequest,
+  acceptFriendRequest,
+  rejectFriendRequest,
+  getFriendsList,
 } from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
@@ -63,6 +68,14 @@ export default function ChatScreen() {
   const [userEmail, setUserEmail] = useState('');
   const [sending, setSending] = useState(false);
   const [uploading, setUploading] = useState(false);
+
+  // Active Main Tab State ('chats' | 'people')
+  const [activeTab, setActiveTab] = useState('chats');
+
+  // Friend Requests & Contacts State
+  const [friendRequests, setFriendRequests] = useState([]);
+  const [friendsList, setFriendsList] = useState([]);
+  const [addFriendInput, setAddFriendInput] = useState('');
 
   // Offline Sync State
   const [syncProgress, setSyncProgress] = useState({ isSyncing: false, remaining: 0 });
@@ -146,6 +159,9 @@ export default function ChatScreen() {
     getBlockedUsers().then((list) => setBlockedUsers(list));
     getGroupChats().then((list) => setGroupChats(list));
     getDirectChats().then((list) => setDirectChats(list));
+
+    getFriendRequests().then((reqs) => setFriendRequests(reqs));
+    getFriendsList().then((friends) => setFriendsList(friends));
 
     // 1. Initial Local Cache Load
     getCachedMessages().then((cached) => {
@@ -310,13 +326,48 @@ export default function ChatScreen() {
     }
   };
 
+  // Friend Request Handlers
+  const handleSendFriendRequest = async () => {
+    if (!addFriendInput.trim()) {
+      Alert.alert('Required field', 'Please enter an email address.');
+      return;
+    }
+    await sendFriendRequest(addFriendInput.trim(), userEmail);
+    const updated = await getFriendRequests();
+    setFriendRequests(updated);
+    const target = addFriendInput.trim();
+    setAddFriendInput('');
+    Alert.alert('Request Sent! 🚀', `Friend request sent to ${target}.`);
+  };
+
+  const handleAcceptFriendRequest = async (requestObj) => {
+    const updatedFriends = await acceptFriendRequest(requestObj);
+    setFriendsList(updatedFriends || []);
+    const updatedReqs = await getFriendRequests();
+    setFriendRequests(updatedReqs);
+    Alert.alert('Friend Added! 🎉', `You are now connected with ${requestObj.from}!`);
+  };
+
+  const handleRejectFriendRequest = async (requestId) => {
+    const updatedReqs = await rejectFriendRequest(requestId);
+    setFriendRequests(updatedReqs);
+  };
+
+  const handleStartFriendChat = async (friendEmail, friendName) => {
+    const newDirect = await addDirectChat(friendEmail, friendName);
+    const updated = await getDirectChats();
+    setDirectChats(updated);
+    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}` });
+    setActiveTab('chats');
+  };
+
   // Block User Handlers
   const handleBlockEmail = async (emailToBlock) => {
     if (!emailToBlock || !emailToBlock.trim()) return;
     const updated = await blockUser(emailToBlock.trim());
     setBlockedUsers(updated);
     setBlockEmailInput('');
-    Alert.alert('User Blocked 🚫', `${emailToBlock} has been blocked and their messages hidden.`);
+    Alert.alert('User Blocked 🚫', `${emailToBlock} has been blocked.`);
   };
 
   const handleUnblockEmail = async (emailToUnblock) => {
@@ -338,6 +389,7 @@ export default function ChatScreen() {
     setDmNameInput('');
     setIsAddDMModalVisible(false);
     setIsRoomModalVisible(false);
+    setActiveTab('chats');
   };
 
   // Create Group Chat Handler
@@ -359,6 +411,7 @@ export default function ChatScreen() {
     setGroupMembersInput('');
     setIsCreateGroupModalVisible(false);
     setIsRoomModalVisible(false);
+    setActiveTab('chats');
   };
 
   // Theme Handlers
@@ -550,6 +603,137 @@ export default function ChatScreen() {
     );
   };
 
+  const renderPeopleTab = () => (
+    <ScrollView contentContainerStyle={styles.peopleTabContainer}>
+      {/* Send Friend Request Card */}
+      <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+        <Text style={[styles.cardTitleText, { color: theme.modalText }]}>➕ Add Friend by Email</Text>
+        <Text style={[styles.cardSubtext, { color: theme.subtext }]}>
+          Send a friend request to connect and start chatting!
+        </Text>
+        <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+          <TextInput
+            style={[styles.modalInput, { flex: 1, backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText, marginTop: 0 }]}
+            placeholder="e.g. friend@gmail.com"
+            placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+            value={addFriendInput}
+            onChangeText={setAddFriendInput}
+            autoCapitalize="none"
+            keyboardType="email-address"
+          />
+          <TouchableOpacity style={styles.primaryBtn} onPress={handleSendFriendRequest}>
+            <Text style={styles.primaryBtnText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* Incoming Friend Requests Card */}
+      <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+        <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
+          📩 Pending Friend Requests ({friendRequests.length})
+        </Text>
+
+        {friendRequests.length === 0 ? (
+          <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic', marginTop: 4 }]}>
+            No pending requests. Send requests above to invite friends!
+          </Text>
+        ) : (
+          friendRequests.map((req) => (
+            <View key={req.id} style={styles.requestRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.requestFromText, { color: theme.modalText }]}>{req.from}</Text>
+                <Text style={[styles.requestSubtext, { color: theme.subtext }]}>Wants to connect with you</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#31a24c' }]}
+                  onPress={() => handleAcceptFriendRequest(req)}
+                >
+                  <Text style={styles.actionBtnText}>Accept ✅</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#e53935' }]}
+                  onPress={() => handleRejectFriendRequest(req.id)}
+                >
+                  <Text style={styles.actionBtnText}>Reject ❌</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
+      {/* Friends List Card */}
+      <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+        <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
+          👥 My Friends ({friendsList.length})
+        </Text>
+
+        {friendsList.length === 0 ? (
+          <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic', marginTop: 4 }]}>
+            No confirmed friends yet. Accept pending requests or add friends above!
+          </Text>
+        ) : (
+          friendsList.map((friend) => (
+            <View key={friend.id} style={styles.friendRow}>
+              <View style={styles.friendAvatar}>
+                <Text style={styles.friendAvatarText}>{friend.name.charAt(0).toUpperCase()}</Text>
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.friendNameText, { color: theme.modalText }]}>{friend.name}</Text>
+                <Text style={[styles.friendEmailText, { color: theme.subtext }]}>{friend.email}</Text>
+              </View>
+
+              <View style={{ flexDirection: 'row', gap: 6 }}>
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: '#0084ff' }]}
+                  onPress={() => handleStartFriendChat(friend.email, friend.name)}
+                >
+                  <Text style={styles.actionBtnText}>Chat 💬</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.actionBtn, { backgroundColor: 'rgba(229,57,53,0.15)' }]}
+                  onPress={() => handleBlockEmail(friend.email)}
+                >
+                  <Text style={{ color: '#e53935', fontSize: 12, fontWeight: '700' }}>Block 🚫</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))
+        )}
+      </View>
+
+      {/* Blocked Users Card */}
+      <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+        <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
+          🚫 Blocked Users ({blockedUsers.length})
+        </Text>
+
+        {blockedUsers.length === 0 ? (
+          <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic', marginTop: 4 }]}>
+            No blocked users.
+          </Text>
+        ) : (
+          blockedUsers.map((email) => (
+            <View key={email} style={styles.blockedUserRow}>
+              <Text style={[styles.blockedUserEmail, { color: theme.modalText }]}>{email}</Text>
+              <TouchableOpacity
+                style={styles.unblockBtn}
+                onPress={() => handleUnblockEmail(email)}
+              >
+                <Text style={styles.unblockBtnText}>Unblock</Text>
+              </TouchableOpacity>
+            </View>
+          ))
+        )}
+      </View>
+    </ScrollView>
+  );
+
   const renderContent = () => (
     <View style={styles.chatWrapper}>
       <FlatList
@@ -616,7 +800,7 @@ export default function ChatScreen() {
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
       >
-        {/* Mobile Header Bar */}
+        {/* Header Bar */}
         <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
           <TouchableOpacity style={styles.headerLeft} onPress={() => setIsRoomModalVisible(true)}>
             <View style={styles.avatarHeader}>
@@ -637,14 +821,6 @@ export default function ChatScreen() {
           </TouchableOpacity>
 
           <View style={styles.headerRight}>
-            <TouchableOpacity
-              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
-              onPress={() => setIsRoomModalVisible(true)}
-            >
-              <Ionicons name="people-outline" size={14} color={theme.accent} />
-              <Text style={[styles.themeBtnText, { color: theme.accent }]}>Chats</Text>
-            </TouchableOpacity>
-
             <TouchableOpacity
               style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
               onPress={() => setNicknameModalVisible(true)}
@@ -670,26 +846,57 @@ export default function ChatScreen() {
           </View>
         </View>
 
+        {/* Main Segmented Navigation Bar: Chats | People */}
+        <View style={[styles.segmentedTabBar, { backgroundColor: theme.isDark ? '#1f1b2e' : '#eef2fd' }]}>
+          <TouchableOpacity
+            style={[styles.tabBtn, activeTab === 'chats' && styles.tabBtnActive]}
+            onPress={() => setActiveTab('chats')}
+          >
+            <Ionicons name="chatbubbles" size={16} color={activeTab === 'chats' ? '#0084ff' : '#888'} />
+            <Text style={[styles.tabBtnText, activeTab === 'chats' && styles.tabBtnTextActive]}>
+              Chats
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.tabBtn, activeTab === 'people' && styles.tabBtnActive]}
+            onPress={() => setActiveTab('people')}
+          >
+            <Ionicons name="people" size={16} color={activeTab === 'people' ? '#0084ff' : '#888'} />
+            <Text style={[styles.tabBtnText, activeTab === 'people' && styles.tabBtnTextActive]}>
+              People & Requests
+            </Text>
+            {friendRequests.length > 0 && (
+              <View style={styles.tabBadge}>
+                <Text style={styles.tabBadgeText}>{friendRequests.length}</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+        </View>
+
         {/* Piso Wi-Fi / Low Data Offline Sync Banner */}
         {syncProgress.remaining > 0 ? (
           <View style={[styles.syncBanner, { backgroundColor: syncProgress.isSyncing ? '#0288d1' : '#e65100' }]}>
             <Ionicons name={syncProgress.isSyncing ? 'sync-outline' : 'wifi-outline'} size={13} color="#fff" style={{ marginRight: 6 }} />
             <Text style={styles.syncBannerText} numberOfLines={1}>
               {syncProgress.isSyncing
-                ? `Syncing ${syncProgress.remaining} offline message${syncProgress.remaining > 1 ? 's' : ''} Guinobatan ↔ Sto. Domingo...`
-                : `Piso Wi-Fi Offline — ${syncProgress.remaining} message${syncProgress.remaining > 1 ? 's' : ''} queued (Auto-sync on connection)`}
+                ? `Syncing ${syncProgress.remaining} offline message${syncProgress.remaining > 1 ? 's' : ''}...`
+                : `Piso Wi-Fi Offline — ${syncProgress.remaining} queued`}
             </Text>
           </View>
         ) : (
           <View style={[styles.syncBanner, { backgroundColor: '#2e7d32' }]}>
             <Ionicons name="shield-checkmark-outline" size={13} color="#fff" style={{ marginRight: 6 }} />
             <Text style={styles.syncBannerText} numberOfLines={1}>
-              Piso Wi-Fi Data-Saver Active — Low Bandwidth Auto-Sync Ready
+              Piso Wi-Fi Data-Saver Active — Low Bandwidth Ready
             </Text>
           </View>
         )}
 
-        {customBg ? (
+        {/* Render Tab View */}
+        {activeTab === 'people' ? (
+          renderPeopleTab()
+        ) : customBg ? (
           <ImageBackground source={{ uri: customBg }} style={styles.bgImage} resizeMode="cover">
             <View style={styles.bgOverlay}>{renderContent()}</View>
           </ImageBackground>
@@ -720,6 +927,7 @@ export default function ChatScreen() {
                   onPress={() => {
                     setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' });
                     setIsRoomModalVisible(false);
+                    setActiveTab('chats');
                   }}
                 >
                   <Text style={styles.roomIcon}>💬</Text>
@@ -750,6 +958,7 @@ export default function ChatScreen() {
                       onPress={() => {
                         setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` });
                         setIsRoomModalVisible(false);
+                        setActiveTab('chats');
                       }}
                     >
                       <Text style={styles.roomIcon}>👥</Text>
@@ -782,6 +991,7 @@ export default function ChatScreen() {
                       onPress={() => {
                         setActiveRoom({ type: 'dm', id: d.id, name: `👤 ${d.name}` });
                         setIsRoomModalVisible(false);
+                        setActiveTab('chats');
                       }}
                     >
                       <Text style={styles.roomIcon}>👤</Text>
@@ -1227,6 +1437,113 @@ const styles = StyleSheet.create({
     borderRadius: 12,
   },
   themeBtnText: { fontSize: 11, fontWeight: '600' },
+
+  // Segmented Navigation Tab Bar
+  segmentedTabBar: {
+    flexDirection: 'row',
+    padding: 4,
+    marginHorizontal: 10,
+    marginTop: 8,
+    borderRadius: 14,
+    gap: 4,
+  },
+  tabBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    borderRadius: 10,
+    gap: 5,
+  },
+  tabBtnActive: {
+    backgroundColor: '#ffffff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  tabBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#777',
+  },
+  tabBtnTextActive: {
+    color: '#0084ff',
+    fontWeight: '700',
+  },
+  tabBadge: {
+    backgroundColor: '#e53935',
+    borderRadius: 10,
+    paddingHorizontal: 6,
+    paddingVertical: 1,
+    marginLeft: 2,
+  },
+  tabBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' },
+
+  // People & Friend Requests Tab View
+  peopleTabContainer: { padding: 12, gap: 12 },
+  peopleCard: {
+    borderRadius: 16,
+    padding: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  cardTitleText: { fontSize: 15, fontWeight: '700', marginBottom: 2 },
+  cardSubtext: { fontSize: 12 },
+
+  primaryBtn: {
+    backgroundColor: '#0084ff',
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  primaryBtnText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+
+  requestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150,150,150,0.15)',
+    gap: 8,
+  },
+  requestFromText: { fontSize: 14, fontWeight: '700' },
+  requestSubtext: { fontSize: 11 },
+
+  actionBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  actionBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  friendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(150,150,150,0.15)',
+    gap: 10,
+  },
+  friendAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#0084ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  friendAvatarText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  friendNameText: { fontSize: 14, fontWeight: '700' },
+  friendEmailText: { fontSize: 11 },
 
   // Messages & Date Header
   listContent: { paddingHorizontal: 10, paddingVertical: 10 },
