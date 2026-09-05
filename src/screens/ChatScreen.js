@@ -211,6 +211,22 @@ export default function ChatScreen() {
     };
   }, []);
 
+  useEffect(() => {
+    if (!userEmail) return;
+    const groupChannel = supabase
+      .channel(`group-members:native:${userEmail}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'group_members' },
+        () => {
+          getGroupChats().then((groups) => setGroupChats(groups));
+        }
+      )
+      .subscribe();
+
+    return () => supabase.removeChannel(groupChannel);
+  }, [userEmail]);
+
   // Supabase Realtime Presence Channel for Online/Offline Status
   useEffect(() => {
     if (!userEmail) return;

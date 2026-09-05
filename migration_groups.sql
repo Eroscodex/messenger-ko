@@ -13,6 +13,19 @@ create table if not exists public.group_members (
   primary key (group_id, user_email)
 );
 
+do $$
+begin
+  if not exists (
+    select 1 from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'group_members'
+  ) then
+    alter publication supabase_realtime add table public.group_members;
+  end if;
+end;
+$$;
+
 alter table public.groups enable row level security;
 alter table public.group_members enable row level security;
 
