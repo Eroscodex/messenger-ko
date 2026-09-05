@@ -389,7 +389,7 @@ export default function ChatScreen() {
     const newDirect = await addDirectChat(friendEmail, friendName);
     const updated = await getDirectChats();
     setDirectChats(updated);
-    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}` });
+    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}`, email: newDirect.email });
     setActiveTab('chats');
   };
 
@@ -416,7 +416,7 @@ export default function ChatScreen() {
     const newDirect = await addDirectChat(dmEmailInput, dmNameInput);
     const updated = await getDirectChats();
     setDirectChats(updated);
-    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}` });
+    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}`, email: newDirect.email });
     setDmEmailInput('');
     setDmNameInput('');
     setIsAddDMModalVisible(false);
