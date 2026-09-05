@@ -58,7 +58,31 @@ export default function LoginScreen({ navigation }) {
 
     if (error) {
       const errMsg = error.message || '';
-      if (
+      if (errMsg.toLowerCase().includes('email not confirmed')) {
+        const notConfirmedMsg = 'Email not confirmed. Please check your email inbox to verify your account, or turn off "Confirm Email" in Supabase Auth settings.';
+        setAuthError(notConfirmedMsg);
+        Alert.alert(
+          'Email Not Confirmed ✉️',
+          `Account ${cleanEmail} needs email confirmation before logging in.\n\nWould you like to resend the confirmation email?`,
+          [
+            { text: 'OK', style: 'cancel' },
+            {
+              text: 'Resend Email 📩',
+              onPress: async () => {
+                const { error: resendErr } = await supabase.auth.resend({
+                  type: 'signup',
+                  email: cleanEmail,
+                });
+                if (resendErr) {
+                  Alert.alert('Resend Error', resendErr.message);
+                } else {
+                  Alert.alert('Confirmation Sent! 📩', `A new confirmation link was sent to ${cleanEmail}. Check your inbox.`);
+                }
+              },
+            },
+          ]
+        );
+      } else if (
         errMsg.toLowerCase().includes('invalid login credentials') ||
         errMsg.toLowerCase().includes('user_not_found') ||
         errMsg.toLowerCase().includes('invalid credentials')
