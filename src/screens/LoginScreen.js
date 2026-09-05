@@ -11,12 +11,15 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 
 export default function LoginScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   const emailRef = useRef(null);
   const passwordRef = useRef(null);
@@ -39,8 +42,10 @@ export default function LoginScreen({ navigation }) {
   const handleLogin = async () => {
     const cleanEmail = email.trim().toLowerCase();
     const cleanPass = password.trim();
+    setAuthError('');
 
     if (!cleanEmail || !cleanPass) {
+      setAuthError('Please enter your email and password.');
       Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
     }
@@ -58,6 +63,7 @@ export default function LoginScreen({ navigation }) {
         errMsg.toLowerCase().includes('user_not_found') ||
         errMsg.toLowerCase().includes('invalid credentials')
       ) {
+        setAuthError('Invalid email or password. Please check your credentials or create an account.');
         Alert.alert(
           'Account Not Found or Invalid Password',
           `Could not log in as ${cleanEmail}.\n\nWould you like to create a new account with this email and password?`,
@@ -70,6 +76,7 @@ export default function LoginScreen({ navigation }) {
           ]
         );
       } else {
+        setAuthError(error.message);
         Alert.alert('Login Failed', error.message);
       }
     }
@@ -78,10 +85,12 @@ export default function LoginScreen({ navigation }) {
 
   const handleAutoSignUp = async (cleanEmail, cleanPass) => {
     if (cleanPass.length < 6) {
+      setAuthError('Password must be at least 6 characters long.');
       Alert.alert('Weak Password', 'Password must be at least 6 characters long.');
       return;
     }
     setLoading(true);
+    setAuthError('');
 
     const { data, error } = await supabase.auth.signUp({
       email: cleanEmail,
@@ -93,8 +102,10 @@ export default function LoginScreen({ navigation }) {
 
     if (error) {
       if (error.status === 429 || error.message.toLowerCase().includes('3 seconds') || error.message.toLowerCase().includes('rate_limit')) {
+        setAuthError('Please wait 3 seconds before sending another signup request.');
         Alert.alert('Please Wait ⏳', 'For security, please wait 3 seconds before sending another signup request.');
       } else {
+        setAuthError(error.message);
         Alert.alert('Registration Error', error.message);
       }
     } else if (data.session) {
@@ -130,15 +141,26 @@ export default function LoginScreen({ navigation }) {
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Welcome back</Text>
 
+          {/* Error Banner */}
+          {!!authError && (
+            <View style={styles.errorBanner}>
+              <Ionicons name="alert-circle-outline" size={18} color="#e53935" style={{ marginRight: 6 }} />
+              <Text style={styles.errorBannerText}>{authError}</Text>
+            </View>
+          )}
+
           <View style={styles.inputWrapper}>
             <Text style={styles.label}>Email Address</Text>
             <TextInput
               ref={emailRef}
               style={styles.input}
-              placeholder="e.g. lezorgasa@gmail.com"
+              placeholder="user@example.com"
               placeholderTextColor="#aaa"
               value={email}
-              onChangeText={setEmail}
+              onChangeText={(val) => {
+                setEmail(val);
+                if (authError) setAuthError('');
+              }}
               autoCapitalize="none"
               keyboardType="email-address"
               autoCorrect={false}
@@ -155,17 +177,33 @@ export default function LoginScreen({ navigation }) {
                 <Text style={{ fontSize: 12, color: '#0084ff', fontWeight: '600' }}>Forgot Password?</Text>
               </TouchableOpacity>
             </View>
-            <TextInput
-              ref={passwordRef}
-              style={styles.input}
-              placeholder="••••••••"
-              placeholderTextColor="#aaa"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              returnKeyType="go"
-              onSubmitEditing={handleLogin}
-            />
+
+            <View style={styles.passwordContainer}>
+              <TextInput
+                ref={passwordRef}
+                style={[styles.input, { flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 }]}
+                placeholder="••••••••"
+                placeholderTextColor="#aaa"
+                value={password}
+                onChangeText={(val) => {
+                  setPassword(val);
+                  if (authError) setAuthError('');
+                }}
+                secureTextEntry={!showPassword}
+                returnKeyType="go"
+                onSubmitEditing={handleLogin}
+              />
+              <TouchableOpacity
+                style={styles.eyeBtn}
+                onPress={() => setShowPassword(!showPassword)}
+              >
+                <Ionicons
+                  name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                  size={20}
+                  color="#666"
+                />
+              </TouchableOpacity>
+            </View>
           </View>
 
           <TouchableOpacity
@@ -257,7 +295,23 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: '700',
     color: '#1a1a2e',
-    marginBottom: 20,
+    marginBottom: 18,
+  },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffebee',
+    borderWidth: 1,
+    borderColor: '#ffcdd2',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 14,
+  },
+  errorBannerText: {
+    color: '#c62828',
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
   },
   inputWrapper: { marginBottom: 16 },
   label: {
@@ -277,6 +331,22 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     fontSize: 16,
     color: '#1a1a2e',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  eyeBtn: {
+    backgroundColor: '#f7f8fc',
+    borderWidth: 1.5,
+    borderLeftWidth: 0,
+    borderColor: '#e8eaf0',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   button: {
     backgroundColor: '#0084ff',

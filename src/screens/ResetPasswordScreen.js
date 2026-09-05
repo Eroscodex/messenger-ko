@@ -11,13 +11,16 @@ import {
   ScrollView,
   ActivityIndicator,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 
 export default function ResetPasswordScreen({ navigation }) {
   const [email, setEmail] = useState('');
   const [newPassword, setNewPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -27,7 +30,9 @@ export default function ResetPasswordScreen({ navigation }) {
 
   const handleSendResetEmail = async () => {
     const cleanEmail = email.trim().toLowerCase();
+    setAuthError('');
     if (!cleanEmail) {
+      setAuthError('Please enter your registered email address.');
       Alert.alert('Missing Email', 'Please enter your registered email address.');
       return;
     }
@@ -40,6 +45,7 @@ export default function ResetPasswordScreen({ navigation }) {
     });
 
     if (error) {
+      setAuthError(error.message);
       Alert.alert('Reset Failed', error.message);
     } else {
       setResetSent(true);
@@ -53,7 +59,9 @@ export default function ResetPasswordScreen({ navigation }) {
 
   const handleUpdatePassword = async () => {
     const cleanPass = newPassword.trim();
+    setAuthError('');
     if (!cleanPass || cleanPass.length < 6) {
+      setAuthError('New password must be at least 6 characters long.');
       Alert.alert('Weak Password', 'New password must be at least 6 characters long.');
       return;
     }
@@ -62,6 +70,7 @@ export default function ResetPasswordScreen({ navigation }) {
     const { error } = await supabase.auth.updateUser({ password: cleanPass });
 
     if (error) {
+      setAuthError(error.message);
       Alert.alert('Update Failed', error.message);
     } else {
       Alert.alert('Password Updated! 🎉', 'Your password has been changed successfully. Log in now!', [
@@ -93,16 +102,27 @@ export default function ResetPasswordScreen({ navigation }) {
         </View>
 
         <View style={styles.card}>
+          {/* Error Banner */}
+          {!!authError && (
+            <View style={styles.errorBanner}>
+              <Ionicons name="alert-circle-outline" size={18} color="#e53935" style={{ marginRight: 6 }} />
+              <Text style={styles.errorBannerText}>{authError}</Text>
+            </View>
+          )}
+
           {!resetSent ? (
             <>
               <View style={styles.inputWrapper}>
                 <Text style={styles.label}>Registered Email</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="e.g. lezorgasa@gmail.com"
+                  placeholder="user@example.com"
                   placeholderTextColor="#aaa"
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(val) => {
+                    setEmail(val);
+                    if (authError) setAuthError('');
+                  }}
                   autoCapitalize="none"
                   keyboardType="email-address"
                 />
@@ -124,14 +144,29 @@ export default function ResetPasswordScreen({ navigation }) {
             <>
               <View style={styles.inputWrapper}>
                 <Text style={styles.label}>New Password</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Min. 6 characters"
-                  placeholderTextColor="#aaa"
-                  value={newPassword}
-                  onChangeText={setNewPassword}
-                  secureTextEntry
-                />
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    style={[styles.input, { flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 }]}
+                    placeholder="Min. 6 characters"
+                    placeholderTextColor="#aaa"
+                    value={newPassword}
+                    onChangeText={(val) => {
+                      setNewPassword(val);
+                      if (authError) setAuthError('');
+                    }}
+                    secureTextEntry={!showPassword}
+                  />
+                  <TouchableOpacity
+                    style={styles.eyeBtn}
+                    onPress={() => setShowPassword(!showPassword)}
+                  >
+                    <Ionicons
+                      name={showPassword ? 'eye-off-outline' : 'eye-outline'}
+                      size={20}
+                      color="#666"
+                    />
+                  </TouchableOpacity>
+                </View>
               </View>
 
               <TouchableOpacity
@@ -208,6 +243,22 @@ const styles = StyleSheet.create({
     elevation: 4,
     marginBottom: 20,
   },
+  errorBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffebee',
+    borderWidth: 1,
+    borderColor: '#ffcdd2',
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 14,
+  },
+  errorBannerText: {
+    color: '#c62828',
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
   inputWrapper: { marginBottom: 16 },
   label: {
     fontSize: 13,
@@ -226,6 +277,22 @@ const styles = StyleSheet.create({
     paddingVertical: 13,
     fontSize: 16,
     color: '#1a1a2e',
+  },
+  passwordContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  eyeBtn: {
+    backgroundColor: '#f7f8fc',
+    borderWidth: 1.5,
+    borderLeftWidth: 0,
+    borderColor: '#e8eaf0',
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   button: {
     backgroundColor: '#0084ff',

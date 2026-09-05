@@ -1053,11 +1053,10 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>
                   Enter the email address of the person you want to chat with.
                 </Text>
-
                 <Text style={[styles.inputLabel, { color: theme.modalText }]}>Email Address:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. lezorgasa@gmail.com"
+                  placeholder="user@example.com"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={dmEmailInput}
                   onChangeText={setDmEmailInput}
@@ -1067,7 +1066,7 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Display Nickname (Optional):</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. Best Friend"
+                  placeholder="Enter nickname"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={dmNameInput}
                   onChangeText={setDmNameInput}
@@ -1110,7 +1109,7 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.inputLabel, { color: theme.modalText }]}>Group Name:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. Family Lounge / Sto. Domingo Crew"
+                  placeholder="Enter group name"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={groupNameInput}
                   onChangeText={setGroupNameInput}
@@ -1119,7 +1118,7 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Member Emails (comma separated):</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. karl@gmail.com, lezil@gmail.com"
+                  placeholder="member1@example.com, member2@example.com"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={groupMembersInput}
                   onChangeText={setGroupMembersInput}
@@ -1336,12 +1335,12 @@ export default function ChatScreenWeb() {
               </View>
 
               <View style={{ paddingVertical: 12 }}>
-                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize display names for Karl & Lezil!</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize display names for your contacts!</Text>
 
                 <Text style={[styles.inputLabel, { color: theme.modalText }]}>Karl's Nickname:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. Karl 💙 / My Man"
+                  placeholder="Enter Karl's nickname"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={karlNicknameInput}
                   onChangeText={setKarlNicknameInput}
@@ -1350,7 +1349,7 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 12 }]}>Lezil's Nickname:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="e.g. Lezil 💕 / My Love"
+                  placeholder="Enter Lezil's nickname"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={lezilNicknameInput}
                   onChangeText={setLezilNicknameInput}
