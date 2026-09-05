@@ -27,7 +27,6 @@ import {
   formatMessageTime,
   getDateDividerLabel,
   shouldShowDateHeader,
-  formatLastActiveTime,
 } from '../utils/dateUtils';
 import {
   getSavedNicknames,
@@ -40,10 +39,18 @@ import {
   sendOrQueueMessage,
   startOfflineSyncLoop,
 } from '../services/offlineSyncService';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getBlockedUsers,
+  blockUser,
+  unblockUser,
+  isUserBlocked,
+  getGroupChats,
+  createGroupChat,
+  getDirectChats,
+  addDirectChat,
+} from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
-const LAST_SEEN_KEY = '@messenger_partner_last_seen';
 
 export default function ChatScreenWeb() {
   const [messages, setMessages] = useState([]);
@@ -57,8 +64,25 @@ export default function ChatScreenWeb() {
 
   // Online Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
-  const [partnerLastActive, setPartnerLastActive] = useState(null);
-  const [, setTick] = useState(0);
+
+  // Room / Conversation State
+  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'General Lounge' });
+  const [groupChats, setGroupChats] = useState([]);
+  const [directChats, setDirectChats] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
+
+  // Modals Visibility
+  const [isRoomModalVisible, setIsRoomModalVisible] = useState(false);
+  const [isAddDMModalVisible, setIsAddDMModalVisible] = useState(false);
+  const [isCreateGroupModalVisible, setIsCreateGroupModalVisible] = useState(false);
+  const [isBlockModalVisible, setIsBlockModalVisible] = useState(false);
+
+  // Modal Inputs
+  const [dmEmailInput, setDmEmailInput] = useState('');
+  const [dmNameInput, setDmNameInput] = useState('');
+  const [groupNameInput, setGroupNameInput] = useState('');
+  const [groupMembersInput, setGroupMembersInput] = useState('');
+  const [blockEmailInput, setBlockEmailInput] = useState('');
 
   // Theme & Background States
   const [currentThemeId, setCurrentThemeId] = useState('classic');
@@ -94,37 +118,21 @@ export default function ChatScreenWeb() {
     status: msg.status || 'sent',
   });
 
-  const sortMessages = (list) => {
-    const map = new Map();
-    (list || []).forEach((m) => {
-      if (m && m.id) map.set(m.id, m);
-    });
-    return Array.from(map.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  };
-
   useEffect(() => {
     // Set Document Title & Official Messenger ⚡ Favicon on Web
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      document.title = 'Messenger-ko Karl & Lezil 𓍯𓂃𓏧♡💫👀💞🫶';
+      document.title = 'Messenger-ko';
       try {
-        const existingLinks = document.querySelectorAll("link[rel*='icon']");
-        existingLinks.forEach((el) => el.remove());
-
-        const linkPng = document.createElement('link');
-        linkPng.rel = 'icon';
-        linkPng.type = 'image/png';
-        linkPng.href = '/favicon.png';
-        document.head.appendChild(linkPng);
-
-        const linkIco = document.createElement('link');
-        linkIco.rel = 'shortcut icon';
-        linkIco.type = 'image/x-icon';
-        linkIco.href = '/favicon.ico';
-        document.head.appendChild(linkIco);
+        let link = document.querySelector("link[rel*='icon']");
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'shortcut icon';
+          document.getElementsByTagName('head')[0].appendChild(link);
+        }
+        link.href = '/favicon.png';
       } catch (e) {}
     }
 
-    // Fetch auth user & saved settings
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user?.email) setUserEmail(user.email);
     });
@@ -143,10 +151,14 @@ export default function ChatScreenWeb() {
       if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
     });
 
-    // 1. Initial Local Cache Load
+    getBlockedUsers().then((list) => setBlockedUsers(list));
+    getGroupChats().then((list) => setGroupChats(list));
+    getDirectChats().then((list) => setDirectChats(list));
+
+    // 1. Initial Cache Load
     getCachedMessages().then((cached) => {
       if (cached && cached.length > 0) {
-        setMessages(sortMessages(cached.map(formatMessage)));
+        setMessages(cached.map(formatMessage).reverse());
       }
       fetchMessages();
     });
@@ -156,22 +168,24 @@ export default function ChatScreenWeb() {
       setSyncProgress(progress);
       getCachedMessages().then((cached) => {
         if (cached && cached.length > 0) {
-          setMessages(sortMessages(cached.map(formatMessage)));
+          setMessages(cached.map(formatMessage).reverse());
         }
       });
     }, 4000);
 
-    // Realtime Database Changes Channel
-    const msgChannel = supabase
-      .channel('public:messages:web_v3')
+    const channel = supabase
+      .channel('public:messages:web_v4')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const newFormatted = formatMessage(payload.new);
           setMessages((prev) => {
-            const filtered = prev.filter((m) => m.id !== newFormatted.id && m.id !== payload.new.temp_id);
-            return sortMessages([newFormatted, ...filtered]);
+            const exists = prev.some((m) => m.id === newFormatted.id || m.id === payload.new.temp_id);
+            if (exists) {
+              return prev.map((m) => (m.id === newFormatted.id || m.id === payload.new.temp_id ? newFormatted : m));
+            }
+            return [newFormatted, ...prev];
           });
         }
       )
@@ -186,21 +200,11 @@ export default function ChatScreenWeb() {
 
     return () => {
       stopSyncLoop();
-      supabase.removeChannel(msgChannel);
+      supabase.removeChannel(channel);
     };
   }, []);
 
-  // Load saved last active timestamp & set ticker interval
-  useEffect(() => {
-    AsyncStorage.getItem(LAST_SEEN_KEY).then((saved) => {
-      if (saved) setPartnerLastActive(saved);
-    });
-
-    const ticker = setInterval(() => setTick((t) => t + 1), 15000);
-    return () => clearInterval(ticker);
-  }, []);
-
-  // Supabase Realtime Presence Channel for Online/Offline Status
+  // Supabase Realtime Presence Channel for Web Online/Offline Status
   useEffect(() => {
     if (!userEmail) return;
 
@@ -213,15 +217,6 @@ export default function ChatScreenWeb() {
         const state = presenceChannel.presenceState();
         const activeKeys = Object.keys(state);
         setOnlineUsers(activeKeys);
-
-        // Track partner last active time
-        const partnerKey = activeKeys.find((k) => k !== userEmail);
-        if (partnerKey && state[partnerKey] && state[partnerKey].length > 0) {
-          const meta = state[partnerKey][0];
-          const time = meta.online_at || new Date().toISOString();
-          setPartnerLastActive(time);
-          AsyncStorage.setItem(LAST_SEEN_KEY, time);
-        }
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -243,18 +238,19 @@ export default function ChatScreenWeb() {
         .from('messages')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(120);
+        .limit(100);
+
       if (error) {
-        console.warn('Web fetch error:', error.message);
+        console.warn('Fetch error:', error.message);
         return;
       }
       if (data) {
         const formatted = data.map(formatMessage);
-        setMessages(sortMessages(formatted));
+        setMessages(formatted);
         setCachedMessages(data);
       }
     } catch (e) {
-      console.warn('Web offline fetch fallback:', e);
+      console.warn('Offline fetch fallback:', e);
     }
   };
 
@@ -272,11 +268,11 @@ export default function ChatScreenWeb() {
     try {
       const { allMessages } = await sendOrQueueMessage({
         text: textToSend,
-        userEmail: userEmail || 'web-user',
+        userEmail: userEmail || 'user@messenger.app',
       });
-      setMessages(sortMessages(allMessages.map(formatMessage)));
+      setMessages(allMessages.map(formatMessage).reverse());
     } catch (e) {
-      console.error('Web Send error:', e);
+      console.error('Send error:', e);
     } finally {
       setSending(false);
     }
@@ -291,49 +287,103 @@ export default function ChatScreenWeb() {
     setMessages((prev) => prev.filter((msg) => msg.id !== id));
   };
 
-  const openFilePicker = () => {
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*,video/*';
-      input.onchange = (e) => {
-        const file = e.target.files[0];
-        if (file) uploadFile(file);
+  const pickImageWeb = () => {
+    if (typeof document === 'undefined') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const base64Str = reader.result.split(',')[1];
+        uploadImage(base64Str, file.type);
       };
-      input.click();
-    }
+      reader.readAsDataURL(file);
+    };
+    input.click();
   };
 
-  const uploadFile = async (file) => {
+  const uploadImage = async (base64Data, contentType = 'image/jpeg') => {
     setUploading(true);
     try {
-      const isVideo = file.type.startsWith('video/');
-      const ext = file.name.split('.').pop() || (isVideo ? 'mp4' : 'jpg');
-      const fileName = `${Date.now()}.${ext}`;
+      const byteCharacters = atob(base64Data);
+      const byteNumbers = new Array(byteCharacters.length);
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
+      const byteArray = new Uint8Array(byteNumbers);
+      const fileName = `${Date.now()}.jpg`;
 
       const { error: uploadError } = await supabase.storage
         .from('chat_media')
-        .upload(fileName, file, { contentType: file.type });
+        .upload(fileName, byteArray, { contentType });
 
       if (uploadError) throw uploadError;
 
       const { data: urlData } = supabase.storage.from('chat_media').getPublicUrl(fileName);
-
-      const { error: msgError } = await supabase.from('messages').insert([
-        {
-          text: '',
-          user_email: userEmail || 'web-user',
-          image_url: isVideo ? null : urlData.publicUrl,
-          video_url: isVideo ? urlData.publicUrl : null,
-        },
-      ]);
+      const { error: msgError } = await supabase
+        .from('messages')
+        .insert([{ text: '', user_email: userEmail, image_url: urlData.publicUrl, video_url: null }]);
 
       if (msgError) throw msgError;
     } catch (e) {
-      Alert.alert('Upload Error', e.message || 'Something went wrong.');
+      Alert.alert('Upload Error', e.message || 'Something went wrong uploading image.');
     } finally {
       setUploading(false);
     }
+  };
+
+  // Block User Handlers
+  const handleBlockEmail = async (emailToBlock) => {
+    if (!emailToBlock || !emailToBlock.trim()) return;
+    const updated = await blockUser(emailToBlock.trim());
+    setBlockedUsers(updated);
+    setBlockEmailInput('');
+    Alert.alert('User Blocked 🚫', `${emailToBlock} has been blocked and their messages hidden.`);
+  };
+
+  const handleUnblockEmail = async (emailToUnblock) => {
+    const updated = await unblockUser(emailToUnblock);
+    setBlockedUsers(updated);
+  };
+
+  // Add Direct 1-on-1 Chat Handler
+  const handleCreateDirectChat = async () => {
+    if (!dmEmailInput.trim()) {
+      Alert.alert('Required field', 'Please enter an email address.');
+      return;
+    }
+    const newDirect = await addDirectChat(dmEmailInput, dmNameInput);
+    const updated = await getDirectChats();
+    setDirectChats(updated);
+    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}` });
+    setDmEmailInput('');
+    setDmNameInput('');
+    setIsAddDMModalVisible(false);
+    setIsRoomModalVisible(false);
+  };
+
+  // Create Group Chat Handler
+  const handleCreateGroup = async () => {
+    if (!groupNameInput.trim()) {
+      Alert.alert('Required field', 'Please enter a Group Name.');
+      return;
+    }
+    const membersList = groupMembersInput
+      .split(',')
+      .map((m) => m.trim())
+      .filter((m) => m.length > 0);
+
+    const newGroup = await createGroupChat(groupNameInput, membersList);
+    const updated = await getGroupChats();
+    setGroupChats(updated);
+    setActiveRoom({ type: 'group', id: newGroup.id, name: `👥 ${newGroup.name}` });
+    setGroupNameInput('');
+    setGroupMembersInput('');
+    setIsCreateGroupModalVisible(false);
+    setIsRoomModalVisible(false);
   };
 
   // Theme Handlers
@@ -343,24 +393,21 @@ export default function ChatScreenWeb() {
     setThemeModalVisible(true);
   };
 
-  const pickCustomWallpaper = () => {
-    if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = 'image/*';
-      input.onchange = (e) => {
-        const file = e.target.files[0];
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = (event) => {
-            const result = event.target.result;
-            setTempCustomBg(result);
-          };
-          reader.readAsDataURL(file);
-        }
+  const pickCustomWallpaperWeb = () => {
+    if (typeof document === 'undefined') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        setTempCustomBg(reader.result);
       };
-      input.click();
-    }
+      reader.readAsDataURL(file);
+    };
+    input.click();
   };
 
   const clearTempWallpaper = () => {
@@ -409,19 +456,16 @@ export default function ChatScreenWeb() {
     setActiveReactionItem(null);
   };
 
+  // Filter out blocked users' messages
+  const visibleMessages = messages.filter((msg) => !isUserBlocked(blockedUsers, msg.userEmail));
+
   // Realtime Online Status Check
   const otherUsersOnline = onlineUsers.filter((u) => u !== userEmail);
   const isPartnerOnline = otherUsersOnline.length > 0;
 
-  // Resolve Partner Details for Header
-  const isLezilUser = userEmail && userEmail.toLowerCase().includes('lezil');
-  const partnerEmail = isLezilUser ? 'karl@messenger.app' : 'lezil@messenger.app';
-  const partnerDisplayName = getDisplayName(partnerEmail, nicknames);
-  const partnerInitial = partnerDisplayName.charAt(0).toUpperCase();
-
-  const renderItem = ({ item, index }) => {
-    const mine = item.userEmail === userEmail;
-    const olderItem = messages[index + 1];
+  const renderMessage = ({ item, index }) => {
+    const isMe = item.userEmail === userEmail;
+    const olderItem = visibleMessages[index + 1];
     const showDateHeader = shouldShowDateHeader(item.createdAt, olderItem?.createdAt);
     const dateLabel = showDateHeader ? getDateDividerLabel(item.createdAt) : null;
 
@@ -438,14 +482,14 @@ export default function ChatScreenWeb() {
       <View style={styles.itemContainer}>
         {showDateHeader && (
           <View style={styles.dateHeaderWrap}>
-            <View style={styles.dateHeaderPill}>
-              <Text style={styles.dateHeaderText}>{dateLabel}</Text>
+            <View style={[styles.dateHeaderPill, { backgroundColor: theme.dateHeaderBg }]}>
+              <Text style={[styles.dateHeaderText, { color: theme.dateHeaderText }]}>{dateLabel}</Text>
             </View>
           </View>
         )}
 
-        <View style={[styles.row, mine ? styles.rowMe : styles.rowOther]}>
-          {!mine && (
+        <View style={[styles.messageRow, isMe ? styles.rowMe : styles.rowOther]}>
+          {!isMe ? (
             isFirstInGroup ? (
               <View style={[styles.avatar, { backgroundColor: theme.accent }]}>
                 <Text style={styles.avatarText}>{initial}</Text>
@@ -453,10 +497,12 @@ export default function ChatScreenWeb() {
             ) : (
               <View style={styles.avatarSpacer} />
             )
-          )}
+          ) : null}
 
-          <View style={[styles.bubbleWrap, mine ? styles.bubbleWrapMe : styles.bubbleWrapOther]}>
-            {!mine && isFirstInGroup && <Text style={styles.senderName}>{displayName}</Text>}
+          <View style={[styles.bubbleWrap, isMe ? styles.bubbleWrapMe : styles.bubbleWrapOther]}>
+            {!isMe && isFirstInGroup && (
+              <Text style={[styles.senderName, { color: theme.senderName }]}>{displayName}</Text>
+            )}
 
             <View style={styles.bubbleContainer}>
               <TouchableOpacity
@@ -464,33 +510,27 @@ export default function ChatScreenWeb() {
                 onLongPress={() => setActiveReactionItem(item)}
                 style={[
                   styles.bubble,
-                  mine
+                  isMe
                     ? { backgroundColor: theme.bubbleMe }
-                    : { backgroundColor: theme.bubbleOther, borderColor: '#eaeaea', borderWidth: 1 },
+                    : { backgroundColor: theme.bubbleOther, borderColor: theme.isDark ? '#3a3a3a' : '#eaeaea', borderWidth: 1 },
                 ]}
               >
                 {item.imageUrl ? (
                   <TouchableOpacity onPress={() => setSelectedMediaUrl(item.imageUrl)}>
-                    <Image source={{ uri: item.imageUrl }} style={styles.mediaImage} resizeMode="cover" />
+                    <Image source={{ uri: item.imageUrl }} style={styles.messageImage} resizeMode="cover" />
                   </TouchableOpacity>
-                ) : item.videoUrl ? (
-                  <View style={styles.videoBox}>
-                    <Text style={styles.videoLink} onPress={() => window.open(item.videoUrl, '_blank')}>
-                      🎥 Tap to watch video
-                    </Text>
-                  </View>
                 ) : (
-                  <Text style={[styles.msgText, { color: mine ? theme.textMe : theme.textOther }]}>
+                  <Text style={[styles.messageText, { color: isMe ? theme.textMe : theme.textOther }]}>
                     {item.text}
                   </Text>
                 )}
 
                 <View style={styles.bubbleFooter}>
-                  <Text style={[styles.time, { color: mine ? 'rgba(255,255,255,0.75)' : '#888' }]}>
+                  <Text style={[styles.timeText, { color: isMe ? 'rgba(255,255,255,0.85)' : (theme.isDark ? '#cccccc' : '#777777') }]}>
                     {formatMessageTime(item.createdAt)}
                   </Text>
 
-                  {mine && (
+                  {isMe && (
                     <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 4, marginRight: 2 }}>
                       {item.status === 'pending' ? (
                         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 193, 7, 0.25)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
@@ -498,14 +538,10 @@ export default function ChatScreenWeb() {
                         </View>
                       ) : item.status === 'syncing' ? (
                         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(33, 150, 243, 0.25)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
-                          <Text style={{ fontSize: 10, color: '#64b5f6', fontWeight: '600' }}>⚡ Syncing</Text>
-                        </View>
-                      ) : isPartnerOnline || (partnerLastActive && new Date(partnerLastActive).getTime() >= item.createdAt.getTime()) ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 255, 255, 0.3)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
-                          <Text style={{ fontSize: 10, color: '#ffffff', fontWeight: '800' }}>👀 Seen</Text>
+                          <Text style={{ fontSize: 10, color: '#64b5f6', fontWeight: '600' }}>🔄 Syncing</Text>
                         </View>
                       ) : (
-                        <Text style={{ fontSize: 11, color: 'rgba(255,255,255,0.85)' }}>✓✓ Sent</Text>
+                        <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.85)' }}>✓✓</Text>
                       )}
                     </View>
                   )}
@@ -517,9 +553,9 @@ export default function ChatScreenWeb() {
                     <Text style={styles.reactionBtnIcon}>😊</Text>
                   </TouchableOpacity>
 
-                  {mine && (
+                  {isMe && (
                     <TouchableOpacity onPress={() => deleteMessage(item.id)} style={styles.deleteBtn}>
-                      <Text style={styles.deleteBtnText}>🗑</Text>
+                      <Text style={{ fontSize: 12, color: isMe ? 'rgba(255,255,255,0.85)' : '#e53935' }}>🗑️</Text>
                     </TouchableOpacity>
                   )}
                 </View>
@@ -528,7 +564,7 @@ export default function ChatScreenWeb() {
 
             {/* Active Emoji Badges */}
             {activeEmojis.length > 0 && (
-              <View style={[styles.activeReactionsBadge, mine ? styles.activeReactionsMe : styles.activeReactionsOther]}>
+              <View style={[styles.activeReactionsBadge, isMe ? styles.activeReactionsMe : styles.activeReactionsOther, { backgroundColor: theme.activeReactionBg, borderColor: theme.isDark ? '#444' : '#eee' }]}>
                 {activeEmojis.map((emoji) => (
                   <Text key={emoji} style={styles.activeEmojiText}>
                     {emoji}
@@ -542,55 +578,50 @@ export default function ChatScreenWeb() {
     );
   };
 
-  const renderChatContent = () => (
+  const renderContent = () => (
     <View style={styles.chatWrapper}>
       <FlatList
-        data={messages}
+        data={visibleMessages}
         keyExtractor={(item) => item.id}
-        renderItem={renderItem}
+        renderItem={renderMessage}
         inverted
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
       />
 
       <View style={[styles.composer, { backgroundColor: theme.composerBg, borderTopColor: theme.inputBorder }]}>
-        <TouchableOpacity style={styles.attachBtn} onPress={openFilePicker} disabled={uploading}>
+        <TouchableOpacity style={styles.attachButton} onPress={pickImageWeb} disabled={uploading || sending}>
           {uploading ? (
             <ActivityIndicator size="small" color={theme.accent} />
           ) : (
-            <Text style={styles.attachIcon}>📎</Text>
+            <Text style={{ fontSize: 20 }}>📷</Text>
           )}
         </TouchableOpacity>
 
         <TextInput
           style={[
-            styles.input,
+            styles.composerInput,
             {
               backgroundColor: theme.inputBg,
               borderColor: theme.inputBorder,
               color: theme.inputText,
             },
           ]}
-          placeholder="Type a message..."
-          placeholderTextColor="#999"
+          placeholder={`Message in ${activeRoom.name}...`}
+          placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
           value={text}
           onChangeText={setText}
-          onSubmitEditing={() => sendMessage()}
           multiline
           maxLength={1000}
         />
 
         {text.trim().length > 0 ? (
           <TouchableOpacity
-            style={[styles.sendBtn, { backgroundColor: theme.accent }, sending && styles.sendBtnDisabled]}
+            style={[styles.sendButton, { backgroundColor: theme.accent }, sending && styles.sendButtonDisabled]}
             onPress={() => sendMessage()}
             disabled={sending}
           >
-            {sending ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Text style={styles.sendText}>➤</Text>
-            )}
+            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>➤</Text>
           </TouchableOpacity>
         ) : (
           <TouchableOpacity
@@ -607,47 +638,53 @@ export default function ChatScreenWeb() {
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
       <View style={[styles.container, { backgroundColor: theme.bg }]}>
-        {/* Integrated Header Bar */}
+        {/* Header Bar */}
         <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
-          <View style={styles.headerLeft}>
-            <View style={[styles.avatarHeader, { backgroundColor: theme.accent }]}>
-              <Text style={styles.avatarHeaderText}>{partnerInitial}</Text>
+          <TouchableOpacity style={styles.headerLeft} onPress={() => setIsRoomModalVisible(true)}>
+            <View style={styles.avatarHeader}>
+              <Text style={styles.avatarHeaderText}>⚡</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
-              <Text style={[styles.headerTitle, { color: theme.headerText }]} numberOfLines={1}>
-                {partnerDisplayName}
-              </Text>
-              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : '#888' }]}>
-                {isPartnerOnline
-                  ? '🟢 Active now'
-                  : partnerLastActive
-                  ? `⚪ ${formatLastActiveTime(partnerLastActive)}`
-                  : '⚪ Offline'}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={[styles.headerTitle, { color: theme.headerText }]} numberOfLines={1}>
+                  {activeRoom.name}
+                </Text>
+                <Text style={{ color: theme.headerText, fontSize: 12 }}>▼</Text>
+              </View>
+              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
+                {isPartnerOnline ? '🟢 Online Now' : '⚪ Offline'}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.headerRight}>
             <TouchableOpacity
-              style={[styles.headerActionBtn, { backgroundColor: theme.inputBg }]}
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
+              onPress={() => setIsRoomModalVisible(true)}
+            >
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>👥 Chats</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
               onPress={() => setNicknameModalVisible(true)}
             >
-              <Text style={styles.headerActionBtnText}>✏️ Names</Text>
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>✏️ Names</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.headerActionBtn, { backgroundColor: theme.inputBg }]}
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
               onPress={openThemeModal}
             >
-              <Text style={styles.headerActionBtnText}>🎨 Theme</Text>
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>🎨 Theme</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.headerActionBtn, { backgroundColor: '#fff0f0', borderColor: '#ffcccc' }]}
+              style={[styles.themeBtn, { backgroundColor: '#fff0f0' }]}
               onPress={handleLogout}
             >
-              <Text style={[styles.headerActionBtnText, { color: '#e53935' }]}>🚪 Logout</Text>
+              <Text style={{ fontSize: 12, color: '#e53935', fontWeight: 'bold' }}>🚪 Exit</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -657,7 +694,7 @@ export default function ChatScreenWeb() {
           <View style={[styles.syncBanner, { backgroundColor: syncProgress.isSyncing ? '#0288d1' : '#e65100' }]}>
             <Text style={styles.syncBannerText} numberOfLines={1}>
               {syncProgress.isSyncing
-                ? `⚡ Syncing ${syncProgress.remaining} offline message${syncProgress.remaining > 1 ? 's' : ''} Guinobatan ↔ Sto. Domingo...`
+                ? `🔄 Syncing ${syncProgress.remaining} offline message${syncProgress.remaining > 1 ? 's' : ''}...`
                 : `📶 Piso Wi-Fi Offline — ${syncProgress.remaining} message${syncProgress.remaining > 1 ? 's' : ''} queued (Auto-sync on connection)`}
             </Text>
           </View>
@@ -669,16 +706,292 @@ export default function ChatScreenWeb() {
           </View>
         )}
 
-        {/* Chat Body & Custom Wallpaper Background */}
         {customBg ? (
           <ImageBackground source={{ uri: customBg }} style={styles.bgImage} resizeMode="cover">
-            <View style={styles.bgOverlay}>{renderChatContent()}</View>
+            <View style={styles.bgOverlay}>{renderContent()}</View>
           </ImageBackground>
         ) : (
-          renderChatContent()
+          renderContent()
         )}
 
-        {/* Emoji Reaction Overlay Modal - Guaranteed Front Stacking on Mobile & Web */}
+        {/* Room Switcher Modal */}
+        <Modal
+          visible={isRoomModalVisible}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setIsRoomModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>💬 Conversations & Rooms</Text>
+                <TouchableOpacity onPress={() => setIsRoomModalVisible(false)}>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Default Lounge</Text>
+                <TouchableOpacity
+                  style={[styles.roomCard, activeRoom.id === 'general' && styles.roomCardActive]}
+                  onPress={() => {
+                    setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' });
+                    setIsRoomModalVisible(false);
+                  }}
+                >
+                  <Text style={styles.roomIcon}>💬</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>General Lounge</Text>
+                    <Text style={[styles.roomSubtext, { color: theme.subtext }]}>Shared main community chat room</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <View style={styles.divider} />
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👥 Group Chats</Text>
+                  <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(true)}>
+                    <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ New Group</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {groupChats.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No group chats created yet. Tap "+ New Group" above!
+                  </Text>
+                ) : (
+                  groupChats.map((g) => (
+                    <TouchableOpacity
+                      key={g.id}
+                      style={[styles.roomCard, activeRoom.id === g.id && styles.roomCardActive]}
+                      onPress={() => {
+                        setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` });
+                        setIsRoomModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.roomIcon}>👥</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.roomTitle, { color: theme.modalText }]}>{g.name}</Text>
+                        <Text style={[styles.roomSubtext, { color: theme.subtext }]}>{g.members.length} member(s)</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+
+                <View style={styles.divider} />
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👤 Direct Messages (1-on-1)</Text>
+                  <TouchableOpacity onPress={() => setIsAddDMModalVisible(true)}>
+                    <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ Add to Chat</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {directChats.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No direct chats added yet. Tap "+ Add to Chat" above!
+                  </Text>
+                ) : (
+                  directChats.map((d) => (
+                    <TouchableOpacity
+                      key={d.id}
+                      style={[styles.roomCard, activeRoom.id === d.id && styles.roomCardActive]}
+                      onPress={() => {
+                        setActiveRoom({ type: 'dm', id: d.id, name: `👤 ${d.name}` });
+                        setIsRoomModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.roomIcon}>👤</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.roomTitle, { color: theme.modalText }]}>{d.name}</Text>
+                        <Text style={[styles.roomSubtext, { color: theme.subtext }]}>{d.email}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+
+                <View style={styles.divider} />
+
+                <TouchableOpacity
+                  style={styles.blockManagerBtn}
+                  onPress={() => {
+                    setIsBlockModalVisible(true);
+                  }}
+                >
+                  <Text style={{ color: '#e53935', fontWeight: '700', fontSize: 14 }}>🚫 Manage Blocked Users ({blockedUsers.length})</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Add Direct DM Modal ("Add to Chat") */}
+        <Modal
+          visible={isAddDMModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsAddDMModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>👤 Add to Chat (1-on-1)</Text>
+                <TouchableOpacity onPress={() => setIsAddDMModalVisible(false)}>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>
+                  Enter the email address of the person you want to chat with.
+                </Text>
+
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Email Address:</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="name@gmail.com"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={dmEmailInput}
+                  onChangeText={setDmEmailInput}
+                  autoCapitalize="none"
+                />
+
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Display Nickname (Optional):</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. Best Friend"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={dmNameInput}
+                  onChangeText={setDmNameInput}
+                />
+              </View>
+
+              <View style={styles.modalFooterActions}>
+                <TouchableOpacity style={styles.cancelActionBtn} onPress={() => setIsAddDMModalVisible(false)}>
+                  <Text style={styles.cancelActionText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveActionBtn} onPress={handleCreateDirectChat}>
+                  <Text style={styles.saveActionText}>Start Chat</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Create Group Chat Modal */}
+        <Modal
+          visible={isCreateGroupModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsCreateGroupModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>👥 Create Group Chat</Text>
+                <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(false)}>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>
+                  Create a custom group conversation room for your team or family!
+                </Text>
+
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Group Name:</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. Family Lounge / Sto. Domingo Crew"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={groupNameInput}
+                  onChangeText={setGroupNameInput}
+                />
+
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Member Emails (comma separated):</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. karl@gmail.com, lezil@gmail.com"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={groupMembersInput}
+                  onChangeText={setGroupMembersInput}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.modalFooterActions}>
+                <TouchableOpacity style={styles.cancelActionBtn} onPress={() => setIsCreateGroupModalVisible(false)}>
+                  <Text style={styles.cancelActionText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveActionBtn} onPress={handleCreateGroup}>
+                  <Text style={styles.saveActionText}>Create Group</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Block Management Modal */}
+        <Modal
+          visible={isBlockModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsBlockModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>🚫 User Blocking & Privacy</Text>
+                <TouchableOpacity onPress={() => setIsBlockModalVisible(false)}>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Block New User</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+                  <TextInput
+                    style={[styles.modalInput, { flex: 1, backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText, marginTop: 0 }]}
+                    placeholder="Enter email to block..."
+                    placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                    value={blockEmailInput}
+                    onChangeText={setBlockEmailInput}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity
+                    style={{ backgroundColor: '#e53935', paddingHorizontal: 14, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }}
+                    onPress={() => handleBlockEmail(blockEmailInput)}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Block</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.divider} />
+
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Currently Blocked Users ({blockedUsers.length})</Text>
+                {blockedUsers.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No blocked users. You're receiving messages from everyone!
+                  </Text>
+                ) : (
+                  blockedUsers.map((email) => (
+                    <View key={email} style={styles.blockedUserRow}>
+                      <Text style={[styles.blockedUserEmail, { color: theme.modalText }]}>{email}</Text>
+                      <TouchableOpacity
+                        style={styles.unblockBtn}
+                        onPress={() => handleUnblockEmail(email)}
+                      >
+                        <Text style={styles.unblockBtnText}>Unblock</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Emoji Reaction Modal & Block Sender */}
         <Modal
           visible={!!activeReactionItem}
           animationType="fade"
@@ -690,13 +1003,13 @@ export default function ChatScreenWeb() {
             activeOpacity={1}
             onPress={() => setActiveReactionItem(null)}
           >
-            <View style={styles.reactionModalBox}>
-              <Text style={styles.reactionModalTitle}>React to Message</Text>
+            <View style={[styles.reactionModalBox, { backgroundColor: theme.modalBg, borderColor: theme.isDark ? '#333' : '#eee' }]}>
+              <Text style={[styles.reactionModalTitle, { color: theme.modalText }]}>React to Message</Text>
 
               {/* Target Message Preview */}
               {activeReactionItem && (
-                <View style={styles.targetMessagePreview}>
-                  <Text style={styles.targetMessageText} numberOfLines={3}>
+                <View style={[styles.targetMessagePreview, { backgroundColor: theme.isDark ? '#27223c' : '#f5f5f5' }]}>
+                  <Text style={[styles.targetMessageText, { color: theme.modalText }]} numberOfLines={3}>
                     {activeReactionItem.text || '[Image / Media]'}
                   </Text>
                 </View>
@@ -708,17 +1021,31 @@ export default function ChatScreenWeb() {
                   <TouchableOpacity
                     key={emoji}
                     onPress={() => toggleReaction(activeReactionItem.id, emoji)}
-                    style={styles.reactionModalEmojiBtn}
+                    style={[styles.reactionModalEmojiBtn, { backgroundColor: theme.isDark ? '#2a2a2a' : '#f8f9fa' }]}
                   >
                     <Text style={styles.reactionModalEmojiText}>{emoji}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
+
+              {/* Block Sender Option if not Me */}
+              {activeReactionItem && activeReactionItem.userEmail !== userEmail && (
+                <TouchableOpacity
+                  style={styles.blockSenderOptionBtn}
+                  onPress={() => {
+                    const sender = activeReactionItem.userEmail;
+                    setActiveReactionItem(null);
+                    handleBlockEmail(sender);
+                  }}
+                >
+                  <Text style={styles.blockSenderOptionText}>🚫 Block Sender ({activeReactionItem.userEmail})</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </TouchableOpacity>
         </Modal>
 
-        {/* Theme Modal with Save / Cancel */}
+        {/* Theme Modal */}
         <Modal
           visible={isThemeModalVisible}
           animationType="slide"
@@ -726,16 +1053,16 @@ export default function ChatScreenWeb() {
           onRequestClose={handleCancelTheme}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>🎨 Custom Themes & Wallpaper</Text>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>🎨 Custom Themes & Wallpaper</Text>
                 <TouchableOpacity onPress={handleCancelTheme}>
-                  <Text style={styles.modalCloseText}>✕</Text>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               <ScrollView contentContainerStyle={styles.themeModalBody}>
-                <Text style={styles.sectionHeader}>Choose Chat Color Theme</Text>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Choose Chat Color Theme</Text>
                 <View style={styles.themeGrid}>
                   {Object.values(THEMES).map((t) => (
                     <TouchableOpacity
@@ -750,23 +1077,23 @@ export default function ChatScreenWeb() {
                       <View style={[styles.themeBubblePreview, { backgroundColor: t.bubbleMe }]}>
                         <Text style={{ color: t.textMe, fontSize: 11, fontWeight: 'bold' }}>{t.emoji}</Text>
                       </View>
-                      <Text style={styles.themeName}>{t.name}</Text>
+                      <Text style={[styles.themeName, { color: t.isDark ? '#ffffff' : '#333333' }]}>{t.name}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
                 <View style={styles.divider} />
 
-                <Text style={styles.sectionHeader}>Custom Image Wallpaper</Text>
-                <Text style={styles.sectionSubtext}>Upload an image background for your chat!</Text>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Custom Image Wallpaper</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Upload photos from your computer as wallpaper!</Text>
 
-                <TouchableOpacity style={styles.uploadWallpaperBtn} onPress={pickCustomWallpaper}>
-                  <Text style={styles.uploadWallpaperBtnText}>📷 Select Custom Image</Text>
+                <TouchableOpacity style={styles.uploadWallpaperBtn} onPress={pickCustomWallpaperWeb}>
+                  <Text style={styles.uploadWallpaperBtnText}>📷 Upload Custom Image</Text>
                 </TouchableOpacity>
 
                 {tempCustomBg && (
                   <TouchableOpacity style={styles.clearWallpaperBtn} onPress={clearTempWallpaper}>
-                    <Text style={styles.clearWallpaperBtnText}>🗑 Remove Wallpaper Image</Text>
+                    <Text style={styles.clearWallpaperBtnText}>🗑️ Remove Wallpaper Image</Text>
                   </TouchableOpacity>
                 )}
               </ScrollView>
@@ -792,29 +1119,31 @@ export default function ChatScreenWeb() {
           onRequestClose={() => setNicknameModalVisible(false)}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>✏️ Set User Nicknames</Text>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>✏️ Set User Nicknames</Text>
                 <TouchableOpacity onPress={() => setNicknameModalVisible(false)}>
-                  <Text style={styles.modalCloseText}>✕</Text>
+                  <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
                 </TouchableOpacity>
               </View>
 
               <View style={{ paddingVertical: 12 }}>
-                <Text style={styles.sectionSubtext}>Customize display names for Karl & Lezil!</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize display names for Karl & Lezil!</Text>
 
-                <Text style={styles.inputLabel}>Karl's Nickname:</Text>
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Karl's Nickname:</Text>
                 <TextInput
-                  style={styles.modalInput}
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
                   placeholder="e.g. Karl 💙 / My Man"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={karlNicknameInput}
                   onChangeText={setKarlNicknameInput}
                 />
 
-                <Text style={[styles.inputLabel, { marginTop: 12 }]}>Lezil's Nickname:</Text>
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 12 }]}>Lezil's Nickname:</Text>
                 <TextInput
-                  style={styles.modalInput}
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
                   placeholder="e.g. Lezil 💕 / My Love"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={lezilNicknameInput}
                   onChangeText={setLezilNicknameInput}
                 />
@@ -836,7 +1165,7 @@ export default function ChatScreenWeb() {
           </View>
         </Modal>
 
-        {/* Fullscreen Image Preview */}
+        {/* Media Preview Modal */}
         <Modal
           visible={!!selectedMediaUrl}
           animationType="fade"
@@ -858,21 +1187,10 @@ export default function ChatScreenWeb() {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1, backgroundColor: '#f0f2f7' },
-  container: {
-    flex: 1,
-    width: '100%',
-    maxWidth: 720,
-    alignSelf: 'center',
-    backgroundColor: '#ffffff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 16,
-    elevation: 5,
-  },
+  safeArea: { flex: 1 },
+  container: { flex: 1 },
   bgImage: { flex: 1 },
-  bgOverlay: { flex: 1, backgroundColor: 'rgba(255, 255, 255, 0.45)' },
+  bgOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.25)' },
   chatWrapper: { flex: 1 },
 
   // Header Styles
@@ -889,16 +1207,15 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 4, minWidth: 0 },
   avatarHeader: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#0084ff',
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
-    marginRight: 4,
   },
-  avatarHeaderText: { fontSize: 16, fontWeight: '800', color: '#ffffff' },
+  avatarHeaderText: { fontSize: 14 },
   onlineDot: {
     width: 9,
     height: 9,
@@ -913,28 +1230,28 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 13, fontWeight: '700' },
   headerSubtitle: { fontSize: 10, fontWeight: '600' },
   headerRight: { flexDirection: 'row', gap: 3, alignItems: 'center', flexShrink: 0 },
-  headerActionBtn: {
+  themeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
     paddingHorizontal: 6,
     paddingVertical: 4,
     borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.1)',
   },
-  headerActionBtnText: { fontSize: 11, fontWeight: '600', color: '#333' },
+  themeBtnText: { fontSize: 11, fontWeight: '600' },
 
-  // Messages List
+  // Messages & Date Header
   listContent: { paddingHorizontal: 10, paddingVertical: 10 },
   itemContainer: { marginBottom: 4 },
   dateHeaderWrap: { alignItems: 'center', marginVertical: 10 },
   dateHeaderPill: {
-    backgroundColor: 'rgba(0, 0, 0, 0.12)',
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  dateHeaderText: { fontSize: 10, fontWeight: '700', color: '#444', textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateHeaderText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
 
-  row: { flexDirection: 'row', alignItems: 'flex-end' },
+  messageRow: { flexDirection: 'row', alignItems: 'flex-end' },
   rowMe: { justifyContent: 'flex-end' },
   rowOther: { justifyContent: 'flex-start' },
 
@@ -953,7 +1270,7 @@ const styles = StyleSheet.create({
   bubbleWrapMe: { alignItems: 'flex-end' },
   bubbleWrapOther: { alignItems: 'flex-start' },
 
-  senderName: { fontSize: 11, color: '#666', marginBottom: 3, marginLeft: 4, fontWeight: '600' },
+  senderName: { fontSize: 11, marginBottom: 3, marginLeft: 4, fontWeight: '600' },
 
   bubbleContainer: { position: 'relative' },
   bubble: {
@@ -961,16 +1278,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 13,
     paddingVertical: 8,
     paddingBottom: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 3,
-    elevation: 1,
   },
-  msgText: { fontSize: 15, lineHeight: 21 },
-  mediaImage: { width: 200, height: 150, borderRadius: 12 },
-  videoBox: { backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, padding: 10 },
-  videoLink: { color: '#fff', fontSize: 13, fontWeight: '600' },
+  messageText: { fontSize: 15, lineHeight: 21 },
+  messageImage: { width: 200, height: 150, borderRadius: 12 },
 
   bubbleFooter: {
     flexDirection: 'row',
@@ -979,26 +1289,83 @@ const styles = StyleSheet.create({
     marginTop: 3,
     gap: 5,
   },
-  time: { fontSize: 10, textAlign: 'right' },
+  timeText: { fontSize: 10, textAlign: 'right' },
   reactionBtn: { paddingHorizontal: 2 },
   reactionBtnIcon: { fontSize: 11, opacity: 0.8 },
   deleteBtn: { paddingHorizontal: 2 },
-  deleteBtnText: { fontSize: 12 },
 
   activeReactionsBadge: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
     borderRadius: 12,
     paddingHorizontal: 5,
     paddingVertical: 2,
     marginTop: -6,
     borderWidth: 1,
-    borderColor: '#eee',
     elevation: 2,
   },
   activeReactionsMe: { marginRight: 6 },
   activeReactionsOther: { marginLeft: 6 },
   activeEmojiText: { fontSize: 12, marginRight: 2 },
+
+  // Room & Block Cards
+  roomCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(150,150,150,0.1)',
+    marginBottom: 6,
+    gap: 10,
+  },
+  roomCardActive: {
+    borderWidth: 2,
+    borderColor: '#0084ff',
+    backgroundColor: 'rgba(0,132,255,0.08)',
+  },
+  roomIcon: { fontSize: 20 },
+  roomTitle: { fontSize: 14, fontWeight: '700' },
+  roomSubtext: { fontSize: 11 },
+
+  blockedUserRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(229,57,53,0.08)',
+    marginBottom: 6,
+  },
+  blockedUserEmail: { fontSize: 13, fontWeight: '600' },
+  unblockBtn: {
+    backgroundColor: '#31a24c',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  unblockBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  blockManagerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(229,57,53,0.08)',
+  },
+
+  blockSenderOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(229,57,53,0.1)',
+    width: '100%',
+  },
+  blockSenderOptionText: { color: '#e53935', fontWeight: '700', fontSize: 13 },
 
   // Composer
   composer: {
@@ -1009,10 +1376,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     gap: 6,
   },
-  attachBtn: { width: 38, height: 38, justifyContent: 'center', alignItems: 'center' },
-  attachIcon: { fontSize: 20 },
-
-  input: {
+  attachButton: { width: 38, height: 38, justifyContent: 'center', alignItems: 'center' },
+  composerInput: {
     flex: 1,
     borderWidth: 1.5,
     borderRadius: 20,
@@ -1021,15 +1386,14 @@ const styles = StyleSheet.create({
     fontSize: 15,
     maxHeight: 120,
   },
-  sendBtn: {
+  sendButton: {
     width: 38,
     height: 38,
     borderRadius: 19,
     justifyContent: 'center',
     alignItems: 'center',
   },
-  sendBtnDisabled: { opacity: 0.5 },
-  sendText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  sendButtonDisabled: { opacity: 0.5 },
   quickLikeBtn: {
     width: 38,
     height: 38,
@@ -1042,39 +1406,37 @@ const styles = StyleSheet.create({
   // Reaction Modal (Front Stacking)
   reactionModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   reactionModalBox: {
-    backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 16,
     width: '100%',
     maxWidth: 340,
     alignItems: 'center',
+    borderWidth: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.25,
     shadowRadius: 10,
     elevation: 12,
   },
-  reactionModalTitle: { fontSize: 14, fontWeight: '700', color: '#666', marginBottom: 10 },
+  reactionModalTitle: { fontSize: 14, fontWeight: '700', marginBottom: 10 },
   targetMessagePreview: {
-    backgroundColor: '#f5f5f5',
     padding: 10,
     borderRadius: 12,
     marginBottom: 14,
     width: '100%',
   },
-  targetMessageText: { fontSize: 14, color: '#333', fontStyle: 'italic' },
+  targetMessageText: { fontSize: 14, fontStyle: 'italic' },
   reactionEmojiRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
   reactionModalEmojiBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#f8f9fa',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1091,7 +1453,6 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '100%',
     maxWidth: 440,
-    backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 18,
     maxHeight: '85%',
@@ -1102,11 +1463,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1a1a2e' },
-  modalCloseText: { fontSize: 18, fontWeight: '700', color: '#888' },
+  modalTitle: { fontSize: 17, fontWeight: '700' },
   themeModalBody: { paddingVertical: 8 },
-  sectionHeader: { fontSize: 14, fontWeight: '700', color: '#333', marginBottom: 6 },
-  sectionSubtext: { fontSize: 12, color: '#666', marginBottom: 10 },
+  sectionHeader: { fontSize: 14, fontWeight: '700', marginBottom: 6 },
+  sectionSubtext: { fontSize: 12, marginBottom: 10 },
 
   themeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
   themeCard: {
@@ -1127,23 +1487,27 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  themeName: { fontSize: 12, fontWeight: '600', color: '#333' },
+  themeName: { fontSize: 12, fontWeight: '600' },
 
-  divider: { height: 1, backgroundColor: '#eee', marginVertical: 14 },
+  divider: { height: 1, backgroundColor: 'rgba(150,150,150,0.2)', marginVertical: 14 },
 
   uploadWallpaperBtn: {
+    flexDirection: 'row',
     backgroundColor: '#0084ff',
     paddingVertical: 10,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 8,
   },
   uploadWallpaperBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   clearWallpaperBtn: {
-    backgroundColor: '#f5f5f5',
+    flexDirection: 'row',
+    backgroundColor: 'rgba(229, 57, 53, 0.1)',
     paddingVertical: 9,
     borderRadius: 10,
     alignItems: 'center',
+    justifyContent: 'center',
   },
   clearWallpaperBtnText: { color: '#e53935', fontSize: 13, fontWeight: '600' },
 
@@ -1154,15 +1518,15 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopColor: 'rgba(150,150,150,0.2)',
   },
   cancelActionBtn: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: 'rgba(150,150,150,0.2)',
   },
-  cancelActionText: { color: '#555', fontWeight: '600', fontSize: 13 },
+  cancelActionText: { color: '#888', fontWeight: '600', fontSize: 13 },
   saveActionBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1171,11 +1535,9 @@ const styles = StyleSheet.create({
   },
   saveActionText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
-  inputLabel: { fontSize: 12, fontWeight: '600', color: '#444' },
+  inputLabel: { fontSize: 12, fontWeight: '600' },
   modalInput: {
-    backgroundColor: '#f7f8fc',
     borderWidth: 1,
-    borderColor: '#ddd',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,

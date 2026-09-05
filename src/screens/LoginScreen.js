@@ -23,38 +23,83 @@ export default function LoginScreen({ navigation }) {
 
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
-      document.title = 'Messenger-ko Karl & Lezil 𓍯𓂃𓏧♡💫👀💞🫶';
+      document.title = 'Messenger-ko';
       try {
-        const existingLinks = document.querySelectorAll("link[rel*='icon']");
-        existingLinks.forEach((el) => el.remove());
-
-        const linkPng = document.createElement('link');
-        linkPng.rel = 'icon';
-        linkPng.type = 'image/png';
-        linkPng.href = '/favicon.png';
-        document.head.appendChild(linkPng);
-
-        const linkIco = document.createElement('link');
-        linkIco.rel = 'shortcut icon';
-        linkIco.type = 'image/x-icon';
-        linkIco.href = '/favicon.ico';
-        document.head.appendChild(linkIco);
+        let link = document.querySelector("link[rel*='icon']");
+        if (!link) {
+          link = document.createElement('link');
+          link.rel = 'shortcut icon';
+          document.getElementsByTagName('head')[0].appendChild(link);
+        }
+        link.href = '/favicon.png';
       } catch (e) {}
     }
   }, []);
 
   const handleLogin = async () => {
-    if (!email.trim() || !password.trim()) {
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
+
+    if (!cleanEmail || !cleanPass) {
       Alert.alert('Missing fields', 'Please enter your email and password.');
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({
-      email: email.trim(),
-      password,
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email: cleanEmail,
+      password: cleanPass,
     });
+
     if (error) {
-      Alert.alert('Login Failed', error.message);
+      const errMsg = error.message || '';
+      if (
+        errMsg.toLowerCase().includes('invalid login credentials') ||
+        errMsg.toLowerCase().includes('user_not_found') ||
+        errMsg.toLowerCase().includes('invalid credentials')
+      ) {
+        Alert.alert(
+          'Account Not Found or Invalid Password',
+          `Could not log in as ${cleanEmail}.\n\nWould you like to create a new account with this email and password?`,
+          [
+            { text: 'Try Again', style: 'cancel' },
+            {
+              text: 'Create Account 🚀',
+              onPress: () => handleAutoSignUp(cleanEmail, cleanPass),
+            },
+          ]
+        );
+      } else {
+        Alert.alert('Login Failed', error.message);
+      }
+    }
+    setLoading(false);
+  };
+
+  const handleAutoSignUp = async (cleanEmail, cleanPass) => {
+    if (cleanPass.length < 6) {
+      Alert.alert('Weak Password', 'Password must be at least 6 characters long.');
+      return;
+    }
+    setLoading(true);
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password: cleanPass,
+      options: {
+        data: { full_name: cleanEmail.split('@')[0] },
+      },
+    });
+
+    if (error) {
+      Alert.alert('Registration Error', error.message);
+    } else if (data.session) {
+      Alert.alert('Welcome! 🎉', 'Account created and logged in successfully!');
+    } else {
+      Alert.alert(
+        'Account Created! 🎉',
+        `Account created for ${cleanEmail}.\nIf email confirmation is required, please verify your inbox or log in now.`
+      );
     }
     setLoading(false);
   };
@@ -73,7 +118,7 @@ export default function LoginScreen({ navigation }) {
           <View style={styles.logoCircle}>
             <Text style={styles.logoIcon}>⚡</Text>
           </View>
-          <Text style={styles.appName}>Messenger-ko Karl & Lezil</Text>
+          <Text style={styles.appName}>Messenger-ko</Text>
           <Text style={styles.tagline}>Connected with you, anywhere 💖</Text>
         </View>
 
@@ -82,11 +127,11 @@ export default function LoginScreen({ navigation }) {
           <Text style={styles.cardTitle}>Welcome back</Text>
 
           <View style={styles.inputWrapper}>
-            <Text style={styles.label}>Email</Text>
+            <Text style={styles.label}>Email Address</Text>
             <TextInput
               ref={emailRef}
               style={styles.input}
-              placeholder="you@example.com"
+              placeholder="name@gmail.com"
               placeholderTextColor="#aaa"
               value={email}
               onChangeText={setEmail}
@@ -127,9 +172,21 @@ export default function LoginScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.footerLink}>
+        {/* Navigation to Create Account / Register */}
+        <TouchableOpacity
+          style={styles.footerRegisterLink}
+          onPress={() => navigation.navigate('Register')}
+          disabled={loading}
+        >
           <Text style={styles.footerText}>
-            Created by <Text style={styles.footerHighlight}>Karl Nicko Alondra</Text>
+            Don't have an account?{' '}
+            <Text style={styles.footerHighlight}>Create Account</Text>
+          </Text>
+        </TouchableOpacity>
+
+        <View style={[styles.footerLink, { marginTop: 16 }]}>
+          <Text style={styles.footerSubtext}>
+            Created by <Text style={styles.footerSubHighlight}>Karl Nicko Alondra</Text>
           </Text>
         </View>
       </ScrollView>
@@ -185,7 +242,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.08,
     shadowRadius: 16,
     elevation: 4,
-    marginBottom: 20,
+    marginBottom: 16,
   },
   cardTitle: {
     fontSize: 20,
@@ -231,15 +288,27 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.3,
   },
-  footerLink: {
+  footerRegisterLink: {
     alignItems: 'center',
+    paddingVertical: 8,
   },
   footerText: {
     fontSize: 15,
-    color: '#666',
+    color: '#555',
   },
   footerHighlight: {
     color: '#0084ff',
     fontWeight: '700',
+  },
+  footerLink: {
+    alignItems: 'center',
+  },
+  footerSubtext: {
+    fontSize: 13,
+    color: '#888',
+  },
+  footerSubHighlight: {
+    color: '#0084ff',
+    fontWeight: '600',
   },
 });

@@ -28,10 +28,10 @@ import {
   getSavedCustomBg,
   saveCustomBg,
 } from '../utils/themeUtils';
+import {
   formatMessageTime,
   getDateDividerLabel,
   shouldShowDateHeader,
-  formatLastActiveTime,
 } from '../utils/dateUtils';
 import {
   getSavedNicknames,
@@ -44,10 +44,18 @@ import {
   sendOrQueueMessage,
   startOfflineSyncLoop,
 } from '../services/offlineSyncService';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import {
+  getBlockedUsers,
+  blockUser,
+  unblockUser,
+  isUserBlocked,
+  getGroupChats,
+  createGroupChat,
+  getDirectChats,
+  addDirectChat,
+} from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
-const LAST_SEEN_KEY = '@messenger_partner_last_seen';
 
 export default function ChatScreen() {
   const [messages, setMessages] = useState([]);
@@ -61,8 +69,25 @@ export default function ChatScreen() {
 
   // Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
-  const [partnerLastActive, setPartnerLastActive] = useState(null);
-  const [, setTick] = useState(0);
+
+  // Room / Conversation State
+  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'General Lounge' });
+  const [groupChats, setGroupChats] = useState([]);
+  const [directChats, setDirectChats] = useState([]);
+  const [blockedUsers, setBlockedUsers] = useState([]);
+
+  // Modals Visibility
+  const [isRoomModalVisible, setIsRoomModalVisible] = useState(false);
+  const [isAddDMModalVisible, setIsAddDMModalVisible] = useState(false);
+  const [isCreateGroupModalVisible, setIsCreateGroupModalVisible] = useState(false);
+  const [isBlockModalVisible, setIsBlockModalVisible] = useState(false);
+
+  // Modal Inputs
+  const [dmEmailInput, setDmEmailInput] = useState('');
+  const [dmNameInput, setDmNameInput] = useState('');
+  const [groupNameInput, setGroupNameInput] = useState('');
+  const [groupMembersInput, setGroupMembersInput] = useState('');
+  const [blockEmailInput, setBlockEmailInput] = useState('');
 
   // Theme & Wallpaper State
   const [currentThemeId, setCurrentThemeId] = useState('classic');
@@ -99,14 +124,6 @@ export default function ChatScreen() {
     status: msg.status || 'sent',
   });
 
-  const sortMessages = (list) => {
-    const map = new Map();
-    (list || []).forEach((m) => {
-      if (m && m.id) map.set(m.id, m);
-    });
-    return Array.from(map.values()).sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  };
-
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
       if (user?.email) setUserEmail(user.email);
@@ -126,10 +143,14 @@ export default function ChatScreen() {
       if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
     });
 
+    getBlockedUsers().then((list) => setBlockedUsers(list));
+    getGroupChats().then((list) => setGroupChats(list));
+    getDirectChats().then((list) => setDirectChats(list));
+
     // 1. Initial Local Cache Load
     getCachedMessages().then((cached) => {
       if (cached && cached.length > 0) {
-        setMessages(sortMessages(cached.map(formatMessage)));
+        setMessages(cached.map(formatMessage).reverse());
       }
       fetchMessages();
     });
@@ -139,21 +160,24 @@ export default function ChatScreen() {
       setSyncProgress(progress);
       getCachedMessages().then((cached) => {
         if (cached && cached.length > 0) {
-          setMessages(sortMessages(cached.map(formatMessage)));
+          setMessages(cached.map(formatMessage).reverse());
         }
       });
     }, 4000);
 
     const channel = supabase
-      .channel('chat:messages_v3')
+      .channel('chat:messages_v4')
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'messages' },
         (payload) => {
           const newFormatted = formatMessage(payload.new);
           setMessages((prev) => {
-            const filtered = prev.filter((m) => m.id !== newFormatted.id && m.id !== payload.new.temp_id);
-            return sortMessages([newFormatted, ...filtered]);
+            const exists = prev.some((m) => m.id === newFormatted.id || m.id === payload.new.temp_id);
+            if (exists) {
+              return prev.map((m) => (m.id === newFormatted.id || m.id === payload.new.temp_id ? newFormatted : m));
+            }
+            return [newFormatted, ...prev];
           });
         }
       )
@@ -172,16 +196,6 @@ export default function ChatScreen() {
     };
   }, []);
 
-  // Load saved last active timestamp & set ticker interval
-  useEffect(() => {
-    AsyncStorage.getItem(LAST_SEEN_KEY).then((saved) => {
-      if (saved) setPartnerLastActive(saved);
-    });
-
-    const ticker = setInterval(() => setTick((t) => t + 1), 15000);
-    return () => clearInterval(ticker);
-  }, []);
-
   // Supabase Realtime Presence Channel for Online/Offline Status
   useEffect(() => {
     if (!userEmail) return;
@@ -195,15 +209,6 @@ export default function ChatScreen() {
         const state = presenceChannel.presenceState();
         const activeKeys = Object.keys(state);
         setOnlineUsers(activeKeys);
-
-        // Track partner last active time
-        const partnerKey = activeKeys.find((k) => k !== userEmail);
-        if (partnerKey && state[partnerKey] && state[partnerKey].length > 0) {
-          const meta = state[partnerKey][0];
-          const time = meta.online_at || new Date().toISOString();
-          setPartnerLastActive(time);
-          AsyncStorage.setItem(LAST_SEEN_KEY, time);
-        }
       })
       .subscribe(async (status) => {
         if (status === 'SUBSCRIBED') {
@@ -233,7 +238,7 @@ export default function ChatScreen() {
       }
       if (data) {
         const formatted = data.map(formatMessage);
-        setMessages(sortMessages(formatted));
+        setMessages(formatted);
         setCachedMessages(data);
       }
     } catch (e) {
@@ -257,7 +262,7 @@ export default function ChatScreen() {
         text: textToSend,
         userEmail: userEmail || 'user@messenger.app',
       });
-      setMessages(sortMessages(allMessages.map(formatMessage)));
+      setMessages(allMessages.map(formatMessage).reverse());
     } catch (e) {
       console.error('Send error:', e);
     } finally {
@@ -303,6 +308,57 @@ export default function ChatScreen() {
     } finally {
       setUploading(false);
     }
+  };
+
+  // Block User Handlers
+  const handleBlockEmail = async (emailToBlock) => {
+    if (!emailToBlock || !emailToBlock.trim()) return;
+    const updated = await blockUser(emailToBlock.trim());
+    setBlockedUsers(updated);
+    setBlockEmailInput('');
+    Alert.alert('User Blocked 🚫', `${emailToBlock} has been blocked and their messages hidden.`);
+  };
+
+  const handleUnblockEmail = async (emailToUnblock) => {
+    const updated = await unblockUser(emailToUnblock);
+    setBlockedUsers(updated);
+  };
+
+  // Add Direct 1-on-1 Chat Handler
+  const handleCreateDirectChat = async () => {
+    if (!dmEmailInput.trim()) {
+      Alert.alert('Required field', 'Please enter an email address.');
+      return;
+    }
+    const newDirect = await addDirectChat(dmEmailInput, dmNameInput);
+    const updated = await getDirectChats();
+    setDirectChats(updated);
+    setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}` });
+    setDmEmailInput('');
+    setDmNameInput('');
+    setIsAddDMModalVisible(false);
+    setIsRoomModalVisible(false);
+  };
+
+  // Create Group Chat Handler
+  const handleCreateGroup = async () => {
+    if (!groupNameInput.trim()) {
+      Alert.alert('Required field', 'Please enter a Group Name.');
+      return;
+    }
+    const membersList = groupMembersInput
+      .split(',')
+      .map((m) => m.trim())
+      .filter((m) => m.length > 0);
+
+    const newGroup = await createGroupChat(groupNameInput, membersList);
+    const updated = await getGroupChats();
+    setGroupChats(updated);
+    setActiveRoom({ type: 'group', id: newGroup.id, name: `👥 ${newGroup.name}` });
+    setGroupNameInput('');
+    setGroupMembersInput('');
+    setIsCreateGroupModalVisible(false);
+    setIsRoomModalVisible(false);
   };
 
   // Theme Handlers
@@ -370,19 +426,16 @@ export default function ChatScreen() {
     setActiveReactionItem(null);
   };
 
+  // Filter out blocked users' messages
+  const visibleMessages = messages.filter((msg) => !isUserBlocked(blockedUsers, msg.userEmail));
+
   // Realtime Online Status Check
   const otherUsersOnline = onlineUsers.filter((u) => u !== userEmail);
   const isPartnerOnline = otherUsersOnline.length > 0;
 
-  // Resolve Partner Details for Header
-  const isLezilUser = userEmail && userEmail.toLowerCase().includes('lezil');
-  const partnerEmail = isLezilUser ? 'karl@messenger.app' : 'lezil@messenger.app';
-  const partnerDisplayName = getDisplayName(partnerEmail, nicknames);
-  const partnerInitial = partnerDisplayName.charAt(0).toUpperCase();
-
   const renderMessage = ({ item, index }) => {
     const isMe = item.userEmail === userEmail;
-    const olderItem = messages[index + 1];
+    const olderItem = visibleMessages[index + 1];
     const showDateHeader = shouldShowDateHeader(item.createdAt, olderItem?.createdAt);
     const dateLabel = showDateHeader ? getDateDividerLabel(item.createdAt) : null;
 
@@ -399,8 +452,8 @@ export default function ChatScreen() {
       <View style={styles.itemContainer}>
         {showDateHeader && (
           <View style={styles.dateHeaderWrap}>
-            <View style={styles.dateHeaderPill}>
-              <Text style={styles.dateHeaderText}>{dateLabel}</Text>
+            <View style={[styles.dateHeaderPill, { backgroundColor: theme.dateHeaderBg }]}>
+              <Text style={[styles.dateHeaderText, { color: theme.dateHeaderText }]}>{dateLabel}</Text>
             </View>
           </View>
         )}
@@ -417,7 +470,9 @@ export default function ChatScreen() {
           ) : null}
 
           <View style={[styles.bubbleWrap, isMe ? styles.bubbleWrapMe : styles.bubbleWrapOther]}>
-            {!isMe && isFirstInGroup && <Text style={styles.senderName}>{displayName}</Text>}
+            {!isMe && isFirstInGroup && (
+              <Text style={[styles.senderName, { color: theme.senderName }]}>{displayName}</Text>
+            )}
 
             <View style={styles.bubbleContainer}>
               <TouchableOpacity
@@ -427,7 +482,7 @@ export default function ChatScreen() {
                   styles.bubble,
                   isMe
                     ? { backgroundColor: theme.bubbleMe }
-                    : { backgroundColor: theme.bubbleOther, borderColor: '#eaeaea', borderWidth: 1 },
+                    : { backgroundColor: theme.bubbleOther, borderColor: theme.isDark ? '#3a3a3a' : '#eaeaea', borderWidth: 1 },
                 ]}
               >
                 {item.imageUrl ? (
@@ -441,7 +496,7 @@ export default function ChatScreen() {
                 )}
 
                 <View style={styles.bubbleFooter}>
-                  <Text style={[styles.timeText, { color: isMe ? 'rgba(255,255,255,0.75)' : '#888' }]}>
+                  <Text style={[styles.timeText, { color: isMe ? 'rgba(255,255,255,0.85)' : (theme.isDark ? '#cccccc' : '#777777') }]}>
                     {formatMessageTime(item.createdAt)}
                   </Text>
 
@@ -456,10 +511,6 @@ export default function ChatScreen() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(33, 150, 243, 0.25)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
                           <Ionicons name="sync-outline" size={11} color="#64b5f6" style={{ marginRight: 2 }} />
                           <Text style={{ fontSize: 10, color: '#64b5f6', fontWeight: '600' }}>Syncing</Text>
-                        </View>
-                      ) : isPartnerOnline || (partnerLastActive && new Date(partnerLastActive).getTime() >= item.createdAt.getTime()) ? (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(255, 255, 255, 0.3)', paddingHorizontal: 5, paddingVertical: 1, borderRadius: 8 }}>
-                          <Text style={{ fontSize: 10, color: '#ffffff', fontWeight: '800' }}>👀 Seen</Text>
                         </View>
                       ) : (
                         <Ionicons name="checkmark-done" size={13} color="rgba(255,255,255,0.85)" />
@@ -476,7 +527,7 @@ export default function ChatScreen() {
 
                   {isMe && (
                     <TouchableOpacity onPress={() => deleteMessage(item.id)} style={styles.deleteBtn}>
-                      <Ionicons name="trash-outline" size={13} color="rgba(255,255,255,0.85)" />
+                      <Ionicons name="trash-outline" size={13} color={isMe ? 'rgba(255,255,255,0.85)' : '#e53935'} />
                     </TouchableOpacity>
                   )}
                 </View>
@@ -485,7 +536,7 @@ export default function ChatScreen() {
 
             {/* Active Emoji Badges */}
             {activeEmojis.length > 0 && (
-              <View style={[styles.activeReactionsBadge, isMe ? styles.activeReactionsMe : styles.activeReactionsOther]}>
+              <View style={[styles.activeReactionsBadge, isMe ? styles.activeReactionsMe : styles.activeReactionsOther, { backgroundColor: theme.activeReactionBg, borderColor: theme.isDark ? '#444' : '#eee' }]}>
                 {activeEmojis.map((emoji) => (
                   <Text key={emoji} style={styles.activeEmojiText}>
                     {emoji}
@@ -503,7 +554,7 @@ export default function ChatScreen() {
     <View style={styles.chatWrapper}>
       <FlatList
         ref={flatListRef}
-        data={messages}
+        data={visibleMessages}
         keyExtractor={(item) => item.id}
         renderItem={renderMessage}
         inverted
@@ -529,8 +580,8 @@ export default function ChatScreen() {
               color: theme.inputText,
             },
           ]}
-          placeholder="Message..."
-          placeholderTextColor="#999"
+          placeholder={`Message in ${activeRoom.name}...`}
+          placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
           value={text}
           onChangeText={setText}
           multiline
@@ -559,7 +610,7 @@ export default function ChatScreen() {
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
-      <StatusBar barStyle={currentThemeId === 'dark' || currentThemeId === 'cyberpunk' ? 'light-content' : 'dark-content'} />
+      <StatusBar barStyle={theme.isDark ? 'light-content' : 'dark-content'} />
       <KeyboardAvoidingView
         style={[styles.container, { backgroundColor: theme.bg }]}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -567,26 +618,33 @@ export default function ChatScreen() {
       >
         {/* Mobile Header Bar */}
         <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
-          <View style={styles.headerLeft}>
-            <View style={[styles.avatarHeader, { backgroundColor: theme.accent }]}>
-              <Text style={styles.avatarHeaderText}>{partnerInitial}</Text>
+          <TouchableOpacity style={styles.headerLeft} onPress={() => setIsRoomModalVisible(true)}>
+            <View style={styles.avatarHeader}>
+              <Text style={styles.avatarHeaderText}>⚡</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
-              <Text style={[styles.headerTitle, { color: theme.headerText }]} numberOfLines={1}>
-                {partnerDisplayName}
-              </Text>
-              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : '#888' }]}>
-                {isPartnerOnline
-                  ? '🟢 Active now'
-                  : partnerLastActive
-                  ? `⚪ ${formatLastActiveTime(partnerLastActive)}`
-                  : '⚪ Offline'}
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                <Text style={[styles.headerTitle, { color: theme.headerText }]} numberOfLines={1}>
+                  {activeRoom.name}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={theme.headerText} />
+              </View>
+              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
+                {isPartnerOnline ? '🟢 Online Now' : '⚪ Offline'}
               </Text>
             </View>
-          </View>
+          </TouchableOpacity>
 
           <View style={styles.headerRight}>
+            <TouchableOpacity
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
+              onPress={() => setIsRoomModalVisible(true)}
+            >
+              <Ionicons name="people-outline" size={14} color={theme.accent} />
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>Chats</Text>
+            </TouchableOpacity>
+
             <TouchableOpacity
               style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
               onPress={() => setNicknameModalVisible(true)}
@@ -639,7 +697,286 @@ export default function ChatScreen() {
           renderContent()
         )}
 
-        {/* Emoji Reaction Modal - Guaranteed FRONT Stacking on Mobile & Android */}
+        {/* Room Switcher Modal */}
+        <Modal
+          visible={isRoomModalVisible}
+          animationType="slide"
+          transparent={true}
+          onRequestClose={() => setIsRoomModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>💬 Conversations & Rooms</Text>
+                <TouchableOpacity onPress={() => setIsRoomModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={theme.modalText} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Default Lounge</Text>
+                <TouchableOpacity
+                  style={[styles.roomCard, activeRoom.id === 'general' && styles.roomCardActive]}
+                  onPress={() => {
+                    setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' });
+                    setIsRoomModalVisible(false);
+                  }}
+                >
+                  <Text style={styles.roomIcon}>💬</Text>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>General Lounge</Text>
+                    <Text style={[styles.roomSubtext, { color: theme.subtext }]}>Shared main community chat room</Text>
+                  </View>
+                </TouchableOpacity>
+
+                <View style={styles.divider} />
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👥 Group Chats</Text>
+                  <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(true)}>
+                    <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ New Group</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {groupChats.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No group chats created yet. Tap "+ New Group" above!
+                  </Text>
+                ) : (
+                  groupChats.map((g) => (
+                    <TouchableOpacity
+                      key={g.id}
+                      style={[styles.roomCard, activeRoom.id === g.id && styles.roomCardActive]}
+                      onPress={() => {
+                        setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` });
+                        setIsRoomModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.roomIcon}>👥</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.roomTitle, { color: theme.modalText }]}>{g.name}</Text>
+                        <Text style={[styles.roomSubtext, { color: theme.subtext }]}>{g.members.length} member(s)</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+
+                <View style={styles.divider} />
+
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                  <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👤 Direct Messages (1-on-1)</Text>
+                  <TouchableOpacity onPress={() => setIsAddDMModalVisible(true)}>
+                    <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ Add to Chat</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {directChats.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No direct chats added yet. Tap "+ Add to Chat" above!
+                  </Text>
+                ) : (
+                  directChats.map((d) => (
+                    <TouchableOpacity
+                      key={d.id}
+                      style={[styles.roomCard, activeRoom.id === d.id && styles.roomCardActive]}
+                      onPress={() => {
+                        setActiveRoom({ type: 'dm', id: d.id, name: `👤 ${d.name}` });
+                        setIsRoomModalVisible(false);
+                      }}
+                    >
+                      <Text style={styles.roomIcon}>👤</Text>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.roomTitle, { color: theme.modalText }]}>{d.name}</Text>
+                        <Text style={[styles.roomSubtext, { color: theme.subtext }]}>{d.email}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))
+                )}
+
+                <View style={styles.divider} />
+
+                <TouchableOpacity
+                  style={styles.blockManagerBtn}
+                  onPress={() => {
+                    setIsBlockModalVisible(true);
+                  }}
+                >
+                  <Ionicons name="shield-outline" size={18} color="#e53935" style={{ marginRight: 6 }} />
+                  <Text style={{ color: '#e53935', fontWeight: '700', fontSize: 14 }}>Manage Blocked Users ({blockedUsers.length})</Text>
+                </TouchableOpacity>
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Add Direct DM Modal ("Add to Chat") */}
+        <Modal
+          visible={isAddDMModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsAddDMModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>👤 Add to Chat (1-on-1)</Text>
+                <TouchableOpacity onPress={() => setIsAddDMModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={theme.modalText} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>
+                  Enter the email address of the person you want to chat with.
+                </Text>
+
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Email Address:</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="name@gmail.com"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={dmEmailInput}
+                  onChangeText={setDmEmailInput}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Display Nickname (Optional):</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. Best Friend"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={dmNameInput}
+                  onChangeText={setDmNameInput}
+                />
+              </View>
+
+              <View style={styles.modalFooterActions}>
+                <TouchableOpacity style={styles.cancelActionBtn} onPress={() => setIsAddDMModalVisible(false)}>
+                  <Text style={styles.cancelActionText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveActionBtn} onPress={handleCreateDirectChat}>
+                  <Text style={styles.saveActionText}>Start Chat</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Create Group Chat Modal */}
+        <Modal
+          visible={isCreateGroupModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsCreateGroupModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>👥 Create Group Chat</Text>
+                <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={theme.modalText} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>
+                  Create a custom group conversation room for your team or family!
+                </Text>
+
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Group Name:</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. Family Lounge / Sto. Domingo Crew"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={groupNameInput}
+                  onChangeText={setGroupNameInput}
+                />
+
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 10 }]}>Member Emails (comma separated):</Text>
+                <TextInput
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                  placeholder="e.g. karl@gmail.com, lezil@gmail.com"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                  value={groupMembersInput}
+                  onChangeText={setGroupMembersInput}
+                  autoCapitalize="none"
+                />
+              </View>
+
+              <View style={styles.modalFooterActions}>
+                <TouchableOpacity style={styles.cancelActionBtn} onPress={() => setIsCreateGroupModalVisible(false)}>
+                  <Text style={styles.cancelActionText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.saveActionBtn} onPress={handleCreateGroup}>
+                  <Text style={styles.saveActionText}>Create Group</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Block Management Modal */}
+        <Modal
+          visible={isBlockModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsBlockModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>🚫 User Blocking & Privacy</Text>
+                <TouchableOpacity onPress={() => setIsBlockModalVisible(false)}>
+                  <Ionicons name="close" size={24} color={theme.modalText} />
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView contentContainerStyle={{ paddingVertical: 10 }}>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Block New User</Text>
+                <View style={{ flexDirection: 'row', gap: 6, marginBottom: 12 }}>
+                  <TextInput
+                    style={[styles.modalInput, { flex: 1, backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText, marginTop: 0 }]}
+                    placeholder="Enter email to block..."
+                    placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                    value={blockEmailInput}
+                    onChangeText={setBlockEmailInput}
+                    autoCapitalize="none"
+                  />
+                  <TouchableOpacity
+                    style={{ backgroundColor: '#e53935', paddingHorizontal: 14, borderRadius: 10, justifyContent: 'center', alignItems: 'center' }}
+                    onPress={() => handleBlockEmail(blockEmailInput)}
+                  >
+                    <Text style={{ color: '#fff', fontWeight: '700' }}>Block</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <View style={styles.divider} />
+
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Currently Blocked Users ({blockedUsers.length})</Text>
+                {blockedUsers.length === 0 ? (
+                  <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
+                    No blocked users. You're receiving messages from everyone!
+                  </Text>
+                ) : (
+                  blockedUsers.map((email) => (
+                    <View key={email} style={styles.blockedUserRow}>
+                      <Text style={[styles.blockedUserEmail, { color: theme.modalText }]}>{email}</Text>
+                      <TouchableOpacity
+                        style={styles.unblockBtn}
+                        onPress={() => handleUnblockEmail(email)}
+                      >
+                        <Text style={styles.unblockBtnText}>Unblock</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ))
+                )}
+              </ScrollView>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Emoji Reaction Modal & Block Sender */}
         <Modal
           visible={!!activeReactionItem}
           animationType="fade"
@@ -651,13 +988,13 @@ export default function ChatScreen() {
             activeOpacity={1}
             onPress={() => setActiveReactionItem(null)}
           >
-            <View style={styles.reactionModalBox}>
-              <Text style={styles.reactionModalTitle}>React to Message</Text>
+            <View style={[styles.reactionModalBox, { backgroundColor: theme.modalBg, borderColor: theme.isDark ? '#333' : '#eee' }]}>
+              <Text style={[styles.reactionModalTitle, { color: theme.modalText }]}>React to Message</Text>
 
               {/* Target Message Preview */}
               {activeReactionItem && (
-                <View style={styles.targetMessagePreview}>
-                  <Text style={styles.targetMessageText} numberOfLines={3}>
+                <View style={[styles.targetMessagePreview, { backgroundColor: theme.isDark ? '#27223c' : '#f5f5f5' }]}>
+                  <Text style={[styles.targetMessageText, { color: theme.modalText }]} numberOfLines={3}>
                     {activeReactionItem.text || '[Image / Media]'}
                   </Text>
                 </View>
@@ -669,12 +1006,27 @@ export default function ChatScreen() {
                   <TouchableOpacity
                     key={emoji}
                     onPress={() => toggleReaction(activeReactionItem.id, emoji)}
-                    style={styles.reactionModalEmojiBtn}
+                    style={[styles.reactionModalEmojiBtn, { backgroundColor: theme.isDark ? '#2a2a2a' : '#f8f9fa' }]}
                   >
                     <Text style={styles.reactionModalEmojiText}>{emoji}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
+
+              {/* Block Sender Option if not Me */}
+              {activeReactionItem && activeReactionItem.userEmail !== userEmail && (
+                <TouchableOpacity
+                  style={styles.blockSenderOptionBtn}
+                  onPress={() => {
+                    const sender = activeReactionItem.userEmail;
+                    setActiveReactionItem(null);
+                    handleBlockEmail(sender);
+                  }}
+                >
+                  <Ionicons name="hand-stop-outline" size={16} color="#e53935" style={{ marginRight: 6 }} />
+                  <Text style={styles.blockSenderOptionText}>Block Sender ({activeReactionItem.userEmail})</Text>
+                </TouchableOpacity>
+              )}
             </View>
           </TouchableOpacity>
         </Modal>
@@ -687,16 +1039,16 @@ export default function ChatScreen() {
           onRequestClose={handleCancelTheme}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>🎨 Custom Themes & Wallpaper</Text>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>🎨 Custom Themes & Wallpaper</Text>
                 <TouchableOpacity onPress={handleCancelTheme}>
-                  <Ionicons name="close" size={24} color="#666" />
+                  <Ionicons name="close" size={24} color={theme.modalText} />
                 </TouchableOpacity>
               </View>
 
               <ScrollView contentContainerStyle={styles.themeModalBody}>
-                <Text style={styles.sectionHeader}>Choose Chat Color Theme</Text>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Choose Chat Color Theme</Text>
                 <View style={styles.themeGrid}>
                   {Object.values(THEMES).map((t) => (
                     <TouchableOpacity
@@ -711,15 +1063,15 @@ export default function ChatScreen() {
                       <View style={[styles.themeBubblePreview, { backgroundColor: t.bubbleMe }]}>
                         <Text style={{ color: t.textMe, fontSize: 11, fontWeight: 'bold' }}>{t.emoji}</Text>
                       </View>
-                      <Text style={styles.themeName}>{t.name}</Text>
+                      <Text style={[styles.themeName, { color: t.isDark ? '#ffffff' : '#333333' }]}>{t.name}</Text>
                     </TouchableOpacity>
                   ))}
                 </View>
 
                 <View style={styles.divider} />
 
-                <Text style={styles.sectionHeader}>Custom Image Wallpaper</Text>
-                <Text style={styles.sectionSubtext}>Upload photos from your gallery as wallpaper!</Text>
+                <Text style={[styles.sectionHeader, { color: theme.modalText }]}>Custom Image Wallpaper</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Upload photos from your gallery as wallpaper!</Text>
 
                 <TouchableOpacity style={styles.uploadWallpaperBtn} onPress={pickCustomWallpaper}>
                   <Ionicons name="image" size={18} color="#fff" style={{ marginRight: 6 }} />
@@ -755,29 +1107,31 @@ export default function ChatScreen() {
           onRequestClose={() => setNicknameModalVisible(false)}
         >
           <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
               <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>✏️ Set User Nicknames</Text>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>✏️ Set User Nicknames</Text>
                 <TouchableOpacity onPress={() => setNicknameModalVisible(false)}>
-                  <Ionicons name="close" size={24} color="#666" />
+                  <Ionicons name="close" size={24} color={theme.modalText} />
                 </TouchableOpacity>
               </View>
 
               <View style={{ paddingVertical: 12 }}>
-                <Text style={styles.sectionSubtext}>Customize display names for Karl & Lezil!</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize display names for Karl & Lezil!</Text>
 
-                <Text style={styles.inputLabel}>Karl's Nickname:</Text>
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Karl's Nickname:</Text>
                 <TextInput
-                  style={styles.modalInput}
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
                   placeholder="e.g. Karl 💙 / My Man"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={karlNicknameInput}
                   onChangeText={setKarlNicknameInput}
                 />
 
-                <Text style={[styles.inputLabel, { marginTop: 12 }]}>Lezil's Nickname:</Text>
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 12 }]}>Lezil's Nickname:</Text>
                 <TextInput
-                  style={styles.modalInput}
+                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
                   placeholder="e.g. Lezil 💕 / My Love"
+                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={lezilNicknameInput}
                   onChangeText={setLezilNicknameInput}
                 />
@@ -824,7 +1178,7 @@ const styles = StyleSheet.create({
   safeArea: { flex: 1 },
   container: { flex: 1 },
   bgImage: { flex: 1 },
-  bgOverlay: { flex: 1, backgroundColor: 'rgba(255, 255, 255, 0.45)' },
+  bgOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.25)' },
   chatWrapper: { flex: 1 },
 
   // Header Styles
@@ -841,16 +1195,15 @@ const styles = StyleSheet.create({
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 4, minWidth: 0 },
   avatarHeader: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#0084ff',
     justifyContent: 'center',
     alignItems: 'center',
     position: 'relative',
-    marginRight: 4,
   },
-  avatarHeaderText: { fontSize: 16, fontWeight: '800', color: '#ffffff' },
+  avatarHeaderText: { fontSize: 14 },
   onlineDot: {
     width: 9,
     height: 9,
@@ -880,12 +1233,11 @@ const styles = StyleSheet.create({
   itemContainer: { marginBottom: 4 },
   dateHeaderWrap: { alignItems: 'center', marginVertical: 10 },
   dateHeaderPill: {
-    backgroundColor: 'rgba(0, 0, 0, 0.12)',
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  dateHeaderText: { fontSize: 10, fontWeight: '700', color: '#444', textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateHeaderText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
 
   messageRow: { flexDirection: 'row', alignItems: 'flex-end' },
   rowMe: { justifyContent: 'flex-end' },
@@ -906,7 +1258,7 @@ const styles = StyleSheet.create({
   bubbleWrapMe: { alignItems: 'flex-end' },
   bubbleWrapOther: { alignItems: 'flex-start' },
 
-  senderName: { fontSize: 11, color: '#666', marginBottom: 3, marginLeft: 4, fontWeight: '600' },
+  senderName: { fontSize: 11, marginBottom: 3, marginLeft: 4, fontWeight: '600' },
 
   bubbleContainer: { position: 'relative' },
   bubble: {
@@ -932,18 +1284,76 @@ const styles = StyleSheet.create({
 
   activeReactionsBadge: {
     flexDirection: 'row',
-    backgroundColor: '#ffffff',
     borderRadius: 12,
     paddingHorizontal: 5,
     paddingVertical: 2,
     marginTop: -6,
     borderWidth: 1,
-    borderColor: '#eee',
     elevation: 2,
   },
   activeReactionsMe: { marginRight: 6 },
   activeReactionsOther: { marginLeft: 6 },
   activeEmojiText: { fontSize: 12, marginRight: 2 },
+
+  // Room & Block Cards
+  roomCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(150,150,150,0.1)',
+    marginBottom: 6,
+    gap: 10,
+  },
+  roomCardActive: {
+    borderWidth: 2,
+    borderColor: '#0084ff',
+    backgroundColor: 'rgba(0,132,255,0.08)',
+  },
+  roomIcon: { fontSize: 20 },
+  roomTitle: { fontSize: 14, fontWeight: '700' },
+  roomSubtext: { fontSize: 11 },
+
+  blockedUserRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: 'rgba(229,57,53,0.08)',
+    marginBottom: 6,
+  },
+  blockedUserEmail: { fontSize: 13, fontWeight: '600' },
+  unblockBtn: {
+    backgroundColor: '#31a24c',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+  },
+  unblockBtnText: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  blockManagerBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    borderRadius: 12,
+    backgroundColor: 'rgba(229,57,53,0.08)',
+  },
+
+  blockSenderOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 14,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    backgroundColor: 'rgba(229,57,53,0.1)',
+    width: '100%',
+  },
+  blockSenderOptionText: { color: '#e53935', fontWeight: '700', fontSize: 13 },
 
   // Composer
   composer: {
@@ -984,39 +1394,37 @@ const styles = StyleSheet.create({
   // Reaction Modal (Front Stacking)
   reactionModalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.4)',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   reactionModalBox: {
-    backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 16,
     width: '100%',
     maxWidth: 340,
     alignItems: 'center',
+    borderWidth: 1,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 6 },
     shadowOpacity: 0.25,
     shadowRadius: 10,
     elevation: 12,
   },
-  reactionModalTitle: { fontSize: 14, fontWeight: '700', color: '#666', marginBottom: 10 },
+  reactionModalTitle: { fontSize: 14, fontWeight: '700', marginBottom: 10 },
   targetMessagePreview: {
-    backgroundColor: '#f5f5f5',
     padding: 10,
     borderRadius: 12,
     marginBottom: 14,
     width: '100%',
   },
-  targetMessageText: { fontSize: 14, color: '#333', fontStyle: 'italic' },
+  targetMessageText: { fontSize: 14, fontStyle: 'italic' },
   reactionEmojiRow: { flexDirection: 'row', gap: 10, justifyContent: 'center' },
   reactionModalEmojiBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#f8f9fa',
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -1033,7 +1441,6 @@ const styles = StyleSheet.create({
   modalContent: {
     width: '100%',
     maxWidth: 440,
-    backgroundColor: '#ffffff',
     borderRadius: 20,
     padding: 18,
     maxHeight: '85%',
@@ -1044,10 +1451,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 14,
   },
-  modalTitle: { fontSize: 17, fontWeight: '700', color: '#1a1a2e' },
+  modalTitle: { fontSize: 17, fontWeight: '700' },
   themeModalBody: { paddingVertical: 8 },
-  sectionHeader: { fontSize: 14, fontWeight: '700', color: '#333', marginBottom: 6 },
-  sectionSubtext: { fontSize: 12, color: '#666', marginBottom: 10 },
+  sectionHeader: { fontSize: 14, fontWeight: '700', marginBottom: 6 },
+  sectionSubtext: { fontSize: 12, marginBottom: 10 },
 
   themeGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 },
   themeCard: {
@@ -1068,9 +1475,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  themeName: { fontSize: 12, fontWeight: '600', color: '#333' },
+  themeName: { fontSize: 12, fontWeight: '600' },
 
-  divider: { height: 1, backgroundColor: '#eee', marginVertical: 14 },
+  divider: { height: 1, backgroundColor: 'rgba(150,150,150,0.2)', marginVertical: 14 },
 
   uploadWallpaperBtn: {
     flexDirection: 'row',
@@ -1084,7 +1491,7 @@ const styles = StyleSheet.create({
   uploadWallpaperBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
   clearWallpaperBtn: {
     flexDirection: 'row',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: 'rgba(229, 57, 53, 0.1)',
     paddingVertical: 9,
     borderRadius: 10,
     alignItems: 'center',
@@ -1099,15 +1506,15 @@ const styles = StyleSheet.create({
     marginTop: 14,
     paddingTop: 10,
     borderTopWidth: 1,
-    borderTopColor: '#eee',
+    borderTopColor: 'rgba(150,150,150,0.2)',
   },
   cancelActionBtn: {
     paddingHorizontal: 14,
     paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#f0f0f0',
+    backgroundColor: 'rgba(150,150,150,0.2)',
   },
-  cancelActionText: { color: '#555', fontWeight: '600', fontSize: 13 },
+  cancelActionText: { color: '#888', fontWeight: '600', fontSize: 13 },
   saveActionBtn: {
     paddingHorizontal: 16,
     paddingVertical: 8,
@@ -1116,11 +1523,9 @@ const styles = StyleSheet.create({
   },
   saveActionText: { color: '#fff', fontWeight: '700', fontSize: 13 },
 
-  inputLabel: { fontSize: 12, fontWeight: '600', color: '#444' },
+  inputLabel: { fontSize: 12, fontWeight: '600' },
   modalInput: {
-    backgroundColor: '#f7f8fc',
     borderWidth: 1,
-    borderColor: '#ddd',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,27 +19,41 @@ export default function RegisterScreen({ navigation }) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.title = 'Create Account — Messenger-ko';
+    }
+  }, []);
+
   const handleRegister = async () => {
-    if (!name.trim() || !email.trim() || !password.trim()) {
+    const cleanName = name.trim();
+    const cleanEmail = email.trim().toLowerCase();
+    const cleanPass = password.trim();
+
+    if (!cleanName || !cleanEmail || !cleanPass) {
       Alert.alert('Missing fields', 'Please fill in all fields.');
       return;
     }
-    if (password.length < 6) {
+    if (cleanPass.length < 6) {
       Alert.alert('Weak password', 'Password must be at least 6 characters.');
       return;
     }
     setLoading(true);
-    const { error } = await supabase.auth.signUp({
-      email: email.trim(),
-      password,
-      options: { data: { full_name: name.trim() } },
+
+    const { data, error } = await supabase.auth.signUp({
+      email: cleanEmail,
+      password: cleanPass,
+      options: { data: { full_name: cleanName } },
     });
+
     if (error) {
       Alert.alert('Registration Failed', error.message);
+    } else if (data.session) {
+      Alert.alert('Account Created! 🎉', 'Welcome to Messenger-ko!');
     } else {
       Alert.alert(
         'Account Created! 🎉',
-        'Check your email to verify your account, then log in.',
+        `Account created for ${cleanEmail}.\nYou can now log in!`,
         [{ text: 'Go to Login', onPress: () => navigation.goBack() }]
       );
     }
@@ -56,16 +70,19 @@ export default function RegisterScreen({ navigation }) {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
+          <View style={styles.logoCircle}>
+            <Text style={styles.logoIcon}>⚡</Text>
+          </View>
           <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Join the conversation today</Text>
+          <Text style={styles.subtitle}>Join Messenger-ko today</Text>
         </View>
 
         <View style={styles.card}>
           <View style={styles.inputWrapper}>
-            <Text style={styles.label}>Full Name</Text>
+            <Text style={styles.label}>Full Name or Nickname</Text>
             <TextInput
               style={styles.input}
-              placeholder="John Doe"
+              placeholder="e.g. Lezil"
               placeholderTextColor="#aaa"
               value={name}
               onChangeText={setName}
@@ -73,10 +90,10 @@ export default function RegisterScreen({ navigation }) {
           </View>
 
           <View style={styles.inputWrapper}>
-            <Text style={styles.label}>Email</Text>
+            <Text style={styles.label}>Email Address</Text>
             <TextInput
               style={styles.input}
-              placeholder="you@example.com"
+              placeholder="name@gmail.com"
               placeholderTextColor="#aaa"
               value={email}
               onChangeText={setEmail}
@@ -134,18 +151,28 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   header: {
+    alignItems: 'center',
     marginBottom: 28,
-    paddingLeft: 4,
   },
+  logoCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#0084ff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  logoIcon: { fontSize: 32, color: '#fff' },
   title: {
-    fontSize: 30,
+    fontSize: 28,
     fontWeight: '800',
     color: '#1a1a2e',
     letterSpacing: 0.3,
   },
   subtitle: {
-    marginTop: 6,
-    fontSize: 15,
+    marginTop: 4,
+    fontSize: 14,
     color: '#666',
   },
   card: {
@@ -179,12 +206,12 @@ const styles = StyleSheet.create({
     color: '#1a1a2e',
   },
   button: {
-    backgroundColor: '#007AFF',
+    backgroundColor: '#0084ff',
     borderRadius: 14,
     paddingVertical: 15,
     alignItems: 'center',
     marginTop: 8,
-    shadowColor: '#007AFF',
+    shadowColor: '#0084ff',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,
@@ -199,5 +226,5 @@ const styles = StyleSheet.create({
   },
   footerLink: { alignItems: 'center' },
   footerText: { fontSize: 15, color: '#666' },
-  footerHighlight: { color: '#007AFF', fontWeight: '700' },
+  footerHighlight: { color: '#0084ff', fontWeight: '700' },
 });
