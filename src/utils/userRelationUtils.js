@@ -1,11 +1,10 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
+import { supabase } from '../config/supabase';
 
 const BLOCKED_USERS_KEY = '@messenger_blocked_users';
 const GROUP_CHATS_KEY = '@messenger_group_chats';
 const DIRECT_CHATS_KEY = '@messenger_direct_chats';
-const FRIEND_REQUESTS_KEY = '@messenger_friend_requests';
-const FRIENDS_LIST_KEY = '@messenger_friends_list';
 
 // Helper for web vs native storage fallback
 const getItem = async (key) => {
@@ -35,7 +34,7 @@ const setItem = async (key, value) => {
   }
 };
 
-// --- BLOCKED USERS ---
+// --- BLOCKED USERS (local only, privacy) ---
 export const getBlockedUsers = async () => {
   const list = await getItem(BLOCKED_USERS_KEY);
   return Array.isArray(list) ? list : [];
@@ -68,72 +67,121 @@ export const isUserBlocked = (blockedList = [], email = '') => {
   return blockedList.some((b) => b.toLowerCase() === clean);
 };
 
-// --- FRIEND REQUESTS & FRIENDS ---
+// --- FRIEND REQUESTS (Supabase-backed, shared across devices) ---
 export const getFriendRequests = async () => {
-  const list = await getItem(FRIEND_REQUESTS_KEY);
-  return Array.isArray(list) ? list : [];
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.email) return [];
+
+    const { data, error } = await supabase
+      .from('friend_requests')
+      .select('*')
+      .or(`from_email.eq.${user.email},to_email.eq.${user.email}`)
+      .eq('status', 'pending');
+
+    if (error) {
+      console.warn('getFriendRequests error:', error.message);
+      return [];
+    }
+
+    // Normalize to { id, from, to, status } shape used by the UI
+    return (data || []).map((r) => ({
+      id: r.id,
+      from: r.from_email,
+      to: r.to_email,
+      status: r.status,
+      createdAt: r.created_at,
+    }));
+  } catch (e) {
+    console.error('getFriendRequests exception:', e);
+    return [];
+  }
 };
 
 export const sendFriendRequest = async (targetEmail, senderEmail = '') => {
   if (!targetEmail) return null;
   const cleanTarget = targetEmail.trim().toLowerCase();
-  const cleanSender = senderEmail.trim().toLowerCase() || 'you@messenger.app';
-  const current = await getFriendRequests();
+  const cleanSender = senderEmail.trim().toLowerCase();
 
-  const existing = current.find((r) => r.from.toLowerCase() === cleanSender && r.to.toLowerCase() === cleanTarget);
-  if (existing) return existing;
+  try {
+    const { data, error } = await supabase
+      .from('friend_requests')
+      .insert([{ from_email: cleanSender, to_email: cleanTarget, status: 'pending' }])
+      .select()
+      .single();
 
-  const newReq = {
-    id: `req_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-    from: cleanSender,
-    to: cleanTarget,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-  };
-
-  const updated = [newReq, ...current];
-  await setItem(FRIEND_REQUESTS_KEY, updated);
-  return newReq;
+    if (error) {
+      // Already exists? That's fine
+      if (error.code === '23505') return { id: null, from: cleanSender, to: cleanTarget, status: 'pending' };
+      console.error('sendFriendRequest error:', error.message);
+      return null;
+    }
+    return { id: data.id, from: data.from_email, to: data.to_email, status: data.status };
+  } catch (e) {
+    console.error('sendFriendRequest exception:', e);
+    return null;
+  }
 };
 
 export const acceptFriendRequest = async (requestObj) => {
-  if (!requestObj) return;
-  const currentReqs = await getFriendRequests();
-  const updatedReqs = currentReqs.filter((r) => r.id !== requestObj.id);
-  await setItem(FRIEND_REQUESTS_KEY, updatedReqs);
+  if (!requestObj) return [];
+  try {
+    const { error } = await supabase
+      .from('friend_requests')
+      .update({ status: 'accepted' })
+      .eq('id', requestObj.id);
 
-  // Add to Friends List
-  const friends = await getFriendsList();
-  const friendEmail = requestObj.from;
-  const existing = friends.find((f) => f.email.toLowerCase() === friendEmail.toLowerCase());
-  if (!existing) {
-    const newFriend = {
-      id: `friend_${Date.now()}`,
-      email: friendEmail,
-      name: friendEmail.split('@')[0],
-      addedAt: new Date().toISOString(),
-    };
-    const updatedFriends = [newFriend, ...friends];
-    await setItem(FRIENDS_LIST_KEY, updatedFriends);
-    await addDirectChat(friendEmail, friendEmail.split('@')[0]);
-    return updatedFriends;
+    if (error) {
+      console.error('acceptFriendRequest error:', error.message);
+      return [];
+    }
+
+    return await getFriendsList();
+  } catch (e) {
+    console.error('acceptFriendRequest exception:', e);
+    return [];
   }
-  return friends;
 };
 
 export const rejectFriendRequest = async (requestId) => {
-  const currentReqs = await getFriendRequests();
-  const updated = currentReqs.filter((r) => r.id !== requestId);
-  await setItem(FRIEND_REQUESTS_KEY, updated);
-  return updated;
+  try {
+    await supabase.from('friend_requests').update({ status: 'rejected' }).eq('id', requestId);
+    return await getFriendRequests();
+  } catch (e) {
+    console.error('rejectFriendRequest exception:', e);
+    return [];
+  }
 };
 
+// --- FRIENDS LIST (Supabase-backed, shared across devices) ---
 export const getFriendsList = async () => {
-  const list = await getItem(FRIENDS_LIST_KEY);
-  return Array.isArray(list) ? list : [];
+  try {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user?.email) return [];
+
+    const { data, error } = await supabase
+      .from('friendships')
+      .select('*')
+      .eq('user_email', user.email);
+
+    if (error) {
+      console.warn('getFriendsList error:', error.message);
+      return [];
+    }
+
+    return (data || []).map((f) => ({
+      id: f.id,
+      email: f.friend_email,
+      name: f.friend_name || f.friend_email.split('@')[0],
+      addedAt: f.created_at,
+    }));
+  } catch (e) {
+    console.error('getFriendsList exception:', e);
+    return [];
+  }
 };
 
-// --- GROUP CHATS ---
+// --- GROUP CHATS (local storage) ---
 export const getGroupChats = async () => {
   const list = await getItem(GROUP_CHATS_KEY);
   return Array.isArray(list) ? list : [];
@@ -153,7 +201,7 @@ export const createGroupChat = async (groupName, members = []) => {
   return newGroup;
 };
 
-// --- DIRECT CHATS (1-on-1) ---
+// --- DIRECT CHATS (1-on-1, local index for sidebar) ---
 export const getDirectChats = async () => {
   const list = await getItem(DIRECT_CHATS_KEY);
   return Array.isArray(list) ? list : [];

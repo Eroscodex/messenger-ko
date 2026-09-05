@@ -289,29 +289,38 @@ export default function ChatScreenWeb() {
 
     try {
       // Build payload based on the active room type
+      // NOTE: room_id requires a DB migration to be run in Supabase.
+      // Until then, we use recipient_email as the routing key for DMs.
       const payload = {
         text: textToSend,
         user_email: userEmail || 'user@messenger.app',
         image_url: null,
         video_url: null,
+        recipient_email: null,
       };
 
-      if (activeRoom.type === 'general') {
-        payload.room_id = 'general';
-      } else if (activeRoom.type === 'group') {
+      if (activeRoom.type === 'group') {
         payload.room_id = activeRoom.id;
       } else if (activeRoom.type === 'dm') {
-        payload.room_id = activeRoom.id || null;
+        // Set recipient so DM messages are routed correctly
         payload.recipient_email = activeRoom.email || null;
       }
+      // General Lounge: no recipient, no room_id — it's public
 
       const { data, error } = await supabase.from('messages').insert([payload]).select().single();
       if (error) {
-        console.error('Send error:', error.message);
+        // If room_id column doesn't exist (migration not run for groups), retry without it
+        if (error.message && error.message.includes('room_id')) {
+          const { room_id, ...payloadWithoutRoomId } = payload;
+          const { data: d2, error: e2 } = await supabase.from('messages').insert([payloadWithoutRoomId]).select().single();
+          if (e2) { Alert.alert('Send Error', e2.message); return; }
+          setMessages((prev) => [formatMessage(d2), ...prev]);
+          return;
+        }
         Alert.alert('Send Error', error.message);
         return;
       }
-      // Message will appear via realtime subscription; also add optimistically
+      // Message will also appear via realtime subscription
       setMessages((prev) => [formatMessage(data), ...prev]);
     } catch (e) {
       console.error('Send error:', e);
@@ -565,15 +574,20 @@ export default function ChatScreenWeb() {
     const msgRecipient = msg.recipient_email || msg.recipientEmail;
 
     if (activeRoom.type === 'dm') {
-      if (msgRoom === activeRoom.id) return true;
+      // Match by room_id (after migration)
+      if (msgRoom && msgRoom === activeRoom.id) return true;
+      // Match by both sender/recipient emails (strict — requires recipient to be set)
       if (activeRoom.email) {
         const userEmailLower = (userEmail || '').toLowerCase();
         const activeEmailLower = (activeRoom.email || '').toLowerCase();
         const msgSenderLower = (msg.userEmail || '').toLowerCase();
         const msgRecipientLower = (msgRecipient || '').toLowerCase();
 
-        const isFromMeToFriend = msgSenderLower === userEmailLower && (msgRecipientLower === activeEmailLower || !msgRecipientLower);
-        const isFromFriendToMe = msgSenderLower === activeEmailLower && (msgRecipientLower === userEmailLower || !msgRecipientLower);
+        // STRICT: recipient_email must be set and match. Never show messages without recipient in DM.
+        if (!msgRecipientLower) return false;
+
+        const isFromMeToFriend = msgSenderLower === userEmailLower && msgRecipientLower === activeEmailLower;
+        const isFromFriendToMe = msgSenderLower === activeEmailLower && msgRecipientLower === userEmailLower;
 
         return isFromMeToFriend || isFromFriendToMe;
       }
@@ -584,9 +598,11 @@ export default function ChatScreenWeb() {
       return msgRoom === activeRoom.id;
     }
 
-    // General Lounge: PUBLIC — show all messages from everyone (not blocked, not room-specific)
-    if (msgRoom && msgRoom !== 'general') return false;
-    return true; // All non-blocked users can see General Lounge messages
+    // General Lounge: PUBLIC — show messages that have no recipient (public messages) and room_id is 'general' or null
+    // DM messages (have recipient_email) must NOT appear in General Lounge
+    if (msgRecipient) return false; // DM messages have a recipient — exclude from General Lounge
+    if (msgRoom && msgRoom !== 'general') return false; // group chat messages — exclude
+    return true; // All non-blocked, non-DM, non-group messages appear in General Lounge
   });
 
   // Separate incoming vs outgoing friend requests for privacy
