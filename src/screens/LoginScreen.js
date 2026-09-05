@@ -131,7 +131,7 @@ export default function LoginScreen({ navigation }) {
             <TextInput
               ref={emailRef}
               style={styles.input}
-              placeholder="name@gmail.com"
+              placeholder="e.g. lezorgasa@gmail.com"
               placeholderTextColor="#aaa"
               value={email}
               onChangeText={setEmail}

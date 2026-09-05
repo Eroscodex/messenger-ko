@@ -93,7 +93,7 @@ export default function RegisterScreen({ navigation }) {
             <Text style={styles.label}>Email Address</Text>
             <TextInput
               style={styles.input}
-              placeholder="name@gmail.com"
+              placeholder="e.g. lezorgasa@gmail.com"
               placeholderTextColor="#aaa"
               value={email}
               onChangeText={setEmail}

@@ -849,7 +849,7 @@ export default function ChatScreenWeb() {
                 <Text style={[styles.inputLabel, { color: theme.modalText }]}>Email Address:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="name@gmail.com"
+                  placeholder="e.g. lezorgasa@gmail.com"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={dmEmailInput}
                   onChangeText={setDmEmailInput}
