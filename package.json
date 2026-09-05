@@ -29,7 +29,7 @@
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "build": "expo export -p web"
+    "build": "expo export -p web && node -e \"const fs=require('fs'); ['favicon.png','favicon.ico','icon.png'].forEach(f => fs.existsSync('assets/'+f) && fs.copyFileSync('assets/'+f, 'dist/'+f))\""
   },
   "private": true,
   "devDependencies": {
