@@ -207,6 +207,17 @@ export default function ChatScreenWeb() {
             if (exists) {
               return prev.map((m) => (m.id === newFormatted.id || m.id === payload.new.temp_id ? newFormatted : m));
             }
+            const pendingIndex = prev.findIndex((m) => (
+              m.status !== 'sent'
+              && m.text === newFormatted.text
+              && m.userEmail.toLowerCase() === newFormatted.userEmail.toLowerCase()
+              && (m.room_id || null) === (newFormatted.room_id || null)
+              && (m.recipient_email || null) === (newFormatted.recipient_email || null)
+              && Math.abs(m.createdAt.getTime() - newFormatted.createdAt.getTime()) < 30000
+            ));
+            if (pendingIndex >= 0) {
+              return prev.map((m, index) => (index === pendingIndex ? newFormatted : m));
+            }
             return [newFormatted, ...prev];
           });
         }
