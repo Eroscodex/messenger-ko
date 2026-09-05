@@ -27,6 +27,7 @@ import {
   formatMessageTime,
   getDateDividerLabel,
   shouldShowDateHeader,
+  formatLastActiveTime,
 } from '../utils/dateUtils';
 import {
   getSavedNicknames,
@@ -925,8 +926,8 @@ export default function ChatScreenWeb() {
                     <Text style={[styles.sidebarItemName, { color: theme.modalText, fontWeight: isSelected ? '700' : '600' }]} numberOfLines={1}>
                       {c.name}
                     </Text>
-                    <Text style={{ fontSize: 11, color: theme.subtext }} numberOfLines={1}>
-                      {c.email}
+                    <Text style={{ fontSize: 11, color: onlineUsers.some((u) => u.toLowerCase() === (c.email || '').toLowerCase()) ? '#31a24c' : theme.subtext }} numberOfLines={1}>
+                      {getActiveStatusText(c.email)}
                     </Text>
                   </View>
                 </TouchableOpacity>
@@ -1049,6 +1050,22 @@ export default function ChatScreenWeb() {
     </View>
   );
 
+  // Dynamic Active / Last Seen Status Helper
+  const getActiveStatusText = (email) => {
+    if (!email) {
+      return isPartnerOnline ? '🟢 Active now' : '⚪ Offline';
+    }
+    const isOnline = onlineUsers.some((u) => u.toLowerCase() === email.toLowerCase());
+    if (isOnline) return '🟢 Active now';
+
+    // Find latest message from this user to calculate relative active time
+    const lastMsg = messages.find((m) => (m.userEmail || '').toLowerCase() === email.toLowerCase());
+    if (lastMsg && lastMsg.createdAt) {
+      return `⚪ ${formatLastActiveTime(lastMsg.createdAt)}`;
+    }
+    return '⚪ Offline';
+  };
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
       <View style={[styles.container, { backgroundColor: theme.bg }]}>
@@ -1066,8 +1083,10 @@ export default function ChatScreenWeb() {
                 </Text>
                 <Text style={{ color: theme.headerText, fontSize: 12 }}>▼</Text>
               </View>
-              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
-                {isPartnerOnline ? '🟢 Online Now' : '⚪ Offline'}
+              <Text style={[styles.headerSubtitle, { color: (activeRoom.type === 'dm' ? onlineUsers.some((u) => u.toLowerCase() === (activeRoom.email || '').toLowerCase()) : isPartnerOnline) ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
+                {activeRoom.type === 'dm' && activeRoom.email
+                  ? getActiveStatusText(activeRoom.email)
+                  : (isPartnerOnline ? '🟢 Active now' : '⚪ Offline')}
               </Text>
             </View>
           </TouchableOpacity>

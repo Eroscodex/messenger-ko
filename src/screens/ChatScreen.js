@@ -32,6 +32,7 @@ import {
   formatMessageTime,
   getDateDividerLabel,
   shouldShowDateHeader,
+  formatLastActiveTime,
 } from '../utils/dateUtils';
 import {
   getSavedNicknames,
@@ -922,6 +923,22 @@ export default function ChatScreen() {
     </View>
   );
 
+  // Dynamic Active / Last Seen Status Helper
+  const getActiveStatusText = (email) => {
+    if (!email) {
+      return isPartnerOnline ? '🟢 Active now' : '⚪ Offline';
+    }
+    const isOnline = onlineUsers.some((u) => u.toLowerCase() === email.toLowerCase());
+    if (isOnline) return '🟢 Active now';
+
+    // Find latest message from this user to calculate relative active time
+    const lastMsg = messages.find((m) => (m.userEmail || '').toLowerCase() === email.toLowerCase());
+    if (lastMsg && lastMsg.createdAt) {
+      return `⚪ ${formatLastActiveTime(lastMsg.createdAt)}`;
+    }
+    return '⚪ Offline';
+  };
+
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
       <StatusBar barStyle={theme.isDark ? 'light-content' : 'dark-content'} />
@@ -944,8 +961,10 @@ export default function ChatScreen() {
                 </Text>
                 <Ionicons name="chevron-down" size={14} color={theme.headerText} />
               </View>
-              <Text style={[styles.headerSubtitle, { color: isPartnerOnline ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
-                {isPartnerOnline ? '🟢 Online Now' : '⚪ Offline'}
+              <Text style={[styles.headerSubtitle, { color: (activeRoom.type === 'dm' ? onlineUsers.some((u) => u.toLowerCase() === (activeRoom.email || '').toLowerCase()) : isPartnerOnline) ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
+                {activeRoom.type === 'dm' && activeRoom.email
+                  ? getActiveStatusText(activeRoom.email)
+                  : (isPartnerOnline ? '🟢 Active now' : '⚪ Offline')}
               </Text>
             </View>
           </TouchableOpacity>
