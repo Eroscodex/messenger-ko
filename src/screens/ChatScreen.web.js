@@ -16,6 +16,7 @@ import {
   SafeAreaView,
 } from 'react-native';
 import { supabase } from '../config/supabase';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import {
   THEMES,
   getSavedThemeId,
@@ -57,7 +58,15 @@ import {
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
 
-export default function ChatScreenWeb() {
+function UploadedVideo({ uri, style }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+  });
+
+  return <VideoView player={player} style={style} contentFit="contain" nativeControls playsInline />;
+}
+
+export default function ChatScreenWeb({ navigation }) {
   const [messages, setMessages] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [text, setText] = useState('');
@@ -347,21 +356,21 @@ export default function ChatScreenWeb() {
     if (typeof document === 'undefined') return;
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*';
+    input.accept = 'image/*,video/*';
     input.onchange = (e) => {
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
       reader.onload = () => {
         const base64Str = reader.result.split(',')[1];
-        uploadImage(base64Str, file.type);
+        uploadMedia(base64Str, file.type, file.type.startsWith('video/') ? 'video' : 'image');
       };
       reader.readAsDataURL(file);
     };
     input.click();
   };
 
-  const uploadImage = async (base64Data, contentType = 'image/jpeg') => {
+  const uploadMedia = async (base64Data, contentType = 'image/jpeg', mediaType = 'image') => {
     setUploading(true);
     try {
       const byteCharacters = atob(base64Data);
@@ -370,7 +379,8 @@ export default function ChatScreenWeb() {
         byteNumbers[i] = byteCharacters.charCodeAt(i);
       }
       const byteArray = new Uint8Array(byteNumbers);
-      const fileName = `${Date.now()}.jpg`;
+      const extension = contentType.split('/')[1] || (mediaType === 'video' ? 'mp4' : 'jpg');
+      const fileName = `${Date.now()}.${extension}`;
 
       const { error: uploadError } = await supabase.storage
         .from('chat_media')
@@ -381,7 +391,12 @@ export default function ChatScreenWeb() {
       const { data: urlData } = supabase.storage.from('chat_media').getPublicUrl(fileName);
       const { error: msgError } = await supabase
         .from('messages')
-        .insert([{ text: '', user_email: userEmail, image_url: urlData.publicUrl, video_url: null }]);
+        .insert([{
+          text: '',
+          user_email: userEmail,
+          image_url: mediaType === 'video' ? null : urlData.publicUrl,
+          video_url: mediaType === 'video' ? urlData.publicUrl : null,
+        }]);
 
       if (msgError) throw msgError;
     } catch (e) {
@@ -660,8 +675,10 @@ export default function ChatScreenWeb() {
               >
                 {item.imageUrl ? (
                   <TouchableOpacity onPress={() => setSelectedMediaUrl(item.imageUrl)}>
-                    <Image source={{ uri: item.imageUrl }} style={styles.messageImage} resizeMode="cover" />
+                    <Image source={{ uri: item.imageUrl }} style={styles.messageImage} resizeMode="contain" />
                   </TouchableOpacity>
+                ) : item.videoUrl ? (
+                  <UploadedVideo uri={item.videoUrl} style={styles.messageVideo} />
                 ) : (
                   <Text style={[styles.messageText, { color: isMe ? theme.textMe : theme.textOther }]}>
                     {item.text}
@@ -1134,6 +1151,14 @@ export default function ChatScreenWeb() {
               onPress={openThemeModal}
             >
               <Text style={[styles.themeBtnText, { color: theme.accent }]}>🎨 Theme</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityLabel="Account settings"
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
+              onPress={() => navigation.navigate('AccountSettings')}
+            >
+              <Text style={{ fontSize: 13, color: theme.accent }}>⚙️</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1863,7 +1888,8 @@ const styles = StyleSheet.create({
     paddingBottom: 5,
   },
   messageText: { fontSize: 15, lineHeight: 21 },
-  messageImage: { width: 200, height: 150, borderRadius: 12 },
+  messageImage: { width: 240, height: 180, maxWidth: '100%', borderRadius: 12 },
+  messageVideo: { width: 240, height: 180, maxWidth: '100%', borderRadius: 12, backgroundColor: '#111' },
 
   bubbleFooter: {
     flexDirection: 'row',

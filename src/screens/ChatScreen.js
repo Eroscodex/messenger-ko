@@ -18,6 +18,7 @@ import {
   StatusBar,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { useVideoPlayer, VideoView } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
 import { decode } from 'base64-arraybuffer';
@@ -62,7 +63,15 @@ import {
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
 
-export default function ChatScreen() {
+function UploadedVideo({ uri, style }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+  });
+
+  return <VideoView player={player} style={style} contentFit="contain" nativeControls />;
+}
+
+export default function ChatScreen({ navigation }) {
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [userEmail, setUserEmail] = useState('');
@@ -343,27 +352,34 @@ export default function ChatScreen() {
 
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
+      mediaTypes: ['images', 'videos'],
       quality: 0.8,
       base64: true,
     });
     if (!result.canceled && result.assets?.length > 0) {
-      uploadImage(result.assets[0].base64);
+      const asset = result.assets[0];
+      uploadMedia(asset.base64, asset.mimeType || (asset.type === 'video' ? 'video/mp4' : 'image/jpeg'), asset.type);
     }
   };
 
-  const uploadImage = async (base64Data) => {
+  const uploadMedia = async (base64Data, contentType, mediaType) => {
     setUploading(true);
     try {
-      const fileName = `${Date.now()}.jpg`;
+      const extension = contentType.split('/')[1] || (mediaType === 'video' ? 'mp4' : 'jpg');
+      const fileName = `${Date.now()}.${extension}`;
       const { error: uploadError } = await supabase.storage
         .from('chat_media')
-        .upload(fileName, decode(base64Data), { contentType: 'image/jpeg' });
+        .upload(fileName, decode(base64Data), { contentType });
       if (uploadError) throw uploadError;
       const { data: urlData } = supabase.storage.from('chat_media').getPublicUrl(fileName);
       const { error: msgError } = await supabase
         .from('messages')
-        .insert([{ text: '', user_email: userEmail, image_url: urlData.publicUrl, video_url: null }]);
+        .insert([{
+          text: '',
+          user_email: userEmail,
+          image_url: mediaType === 'video' ? null : urlData.publicUrl,
+          video_url: mediaType === 'video' ? urlData.publicUrl : null,
+        }]);
       if (msgError) throw msgError;
     } catch (e) {
       Alert.alert('Upload Error', e.message || 'Something went wrong.');
@@ -630,8 +646,10 @@ export default function ChatScreen() {
               >
                 {item.imageUrl ? (
                   <TouchableOpacity onPress={() => setSelectedMediaUrl(item.imageUrl)}>
-                    <Image source={{ uri: item.imageUrl }} style={styles.messageImage} resizeMode="cover" />
+                    <Image source={{ uri: item.imageUrl }} style={styles.messageImage} resizeMode="contain" />
                   </TouchableOpacity>
+                ) : item.videoUrl ? (
+                  <UploadedVideo uri={item.videoUrl} style={styles.messageVideo} />
                 ) : (
                   <Text style={[styles.messageText, { color: isMe ? theme.textMe : theme.textOther }]}>
                     {item.text}
@@ -1006,6 +1024,14 @@ export default function ChatScreen() {
             >
               <Ionicons name="color-palette-outline" size={14} color={theme.accent} />
               <Text style={[styles.themeBtnText, { color: theme.accent }]}>Theme</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              accessibilityLabel="Account settings"
+              style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
+              onPress={() => navigation.navigate('AccountSettings')}
+            >
+              <Ionicons name="settings-outline" size={14} color={theme.accent} />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1744,7 +1770,8 @@ const styles = StyleSheet.create({
     paddingBottom: 5,
   },
   messageText: { fontSize: 15, lineHeight: 21 },
-  messageImage: { width: 200, height: 150, borderRadius: 12 },
+  messageImage: { width: 240, height: 180, maxWidth: '100%', borderRadius: 12 },
+  messageVideo: { width: 240, height: 180, maxWidth: '100%', borderRadius: 12, backgroundColor: '#111' },
 
   bubbleFooter: {
     flexDirection: 'row',
