@@ -508,8 +508,52 @@ export default function ChatScreen() {
     setActiveReactionItem(null);
   };
 
-  // Filter out blocked users' messages
-  const visibleMessages = messages.filter((msg) => !isUserBlocked(blockedUsers, msg.userEmail));
+  // Filter out blocked users' messages and enforce strict room / privacy filtering
+  const visibleMessages = messages.filter((msg) => {
+    // 1. Blocked check
+    if (isUserBlocked(blockedUsers, msg.userEmail)) return false;
+
+    // 2. Room & Privacy Filter
+    const msgRoom = msg.room_id || msg.roomId;
+    const msgRecipient = msg.recipient_email || msg.recipientEmail;
+
+    if (activeRoom.type === 'dm') {
+      if (msgRoom === activeRoom.id) return true;
+      if (activeRoom.email) {
+        const userEmailLower = (userEmail || '').toLowerCase();
+        const activeEmailLower = (activeRoom.email || '').toLowerCase();
+        const msgSenderLower = (msg.userEmail || '').toLowerCase();
+        const msgRecipientLower = (msgRecipient || '').toLowerCase();
+
+        const isFromMeToFriend = msgSenderLower === userEmailLower && (msgRecipientLower === activeEmailLower || !msgRecipientLower);
+        const isFromFriendToMe = msgSenderLower === activeEmailLower && (msgRecipientLower === userEmailLower || !msgRecipientLower);
+
+        return isFromMeToFriend || isFromFriendToMe;
+      }
+      return false;
+    }
+
+    if (activeRoom.type === 'group') {
+      return msgRoom === activeRoom.id;
+    }
+
+    // General Lounge: Only show messages if sent by self or confirmed friends
+    if (msgRoom && msgRoom !== 'general') return false;
+    const userEmailLower = (userEmail || '').toLowerCase();
+    const msgSenderLower = (msg.userEmail || '').toLowerCase();
+
+    if (msgSenderLower === userEmailLower) return true;
+    const isFriend = friendsList.some((f) => (f.email || '').toLowerCase() === msgSenderLower);
+    return isFriend;
+  });
+
+  // Separate incoming vs outgoing friend requests for privacy
+  const incomingRequests = friendRequests.filter(
+    (req) => (req.to || '').toLowerCase() === (userEmail || '').toLowerCase()
+  );
+  const outgoingRequests = friendRequests.filter(
+    (req) => (req.from || '').toLowerCase() === (userEmail || '').toLowerCase()
+  );
 
   // Realtime Online Status Check
   const otherUsersOnline = onlineUsers.filter((u) => u !== userEmail);
@@ -656,18 +700,18 @@ export default function ChatScreen() {
         </View>
       </View>
 
-      {/* Incoming Friend Requests Card */}
+      {/* Incoming Friend Requests Card (Sent to me) */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
         <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
-          📩 Pending Friend Requests ({friendRequests.length})
+          📩 Pending Friend Requests ({incomingRequests.length})
         </Text>
 
-        {friendRequests.length === 0 ? (
+        {incomingRequests.length === 0 ? (
           <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic', marginTop: 4 }]}>
-            No pending requests. Send requests above to invite friends!
+            No incoming pending requests. Send requests above to invite friends!
           </Text>
         ) : (
-          friendRequests.map((req) => (
+          incomingRequests.map((req) => (
             <View key={req.id} style={styles.requestRow}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.requestFromText, { color: theme.modalText }]}>{req.from}</Text>
@@ -693,6 +737,31 @@ export default function ChatScreen() {
           ))
         )}
       </View>
+
+      {/* Outgoing Sent Friend Requests Card (Sent by me) */}
+      {outgoingRequests.length > 0 && (
+        <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+          <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
+            📤 Sent Friend Requests ({outgoingRequests.length})
+          </Text>
+
+          {outgoingRequests.map((req) => (
+            <View key={req.id} style={styles.requestRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.requestFromText, { color: theme.modalText }]}>{req.to}</Text>
+                <Text style={[styles.requestSubtext, { color: theme.subtext }]}>Friend request sent (Waiting for response ⏳)</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: 'rgba(229,57,53,0.15)' }]}
+                onPress={() => handleRejectFriendRequest(req.id)}
+              >
+                <Text style={{ color: '#e53935', fontSize: 12, fontWeight: '700' }}>Cancel 🗑️</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Friends List Card */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
@@ -762,6 +831,27 @@ export default function ChatScreen() {
       </View>
     </ScrollView>
   );
+
+  const getCombinedConversations = () => {
+    const map = new Map();
+    (friendsList || []).forEach((f) => {
+      map.set(f.email.toLowerCase(), {
+        id: f.id || `dm_${f.email}`,
+        email: f.email,
+        name: f.name || f.email.split('@')[0],
+      });
+    });
+    (directChats || []).forEach((d) => {
+      if (d.email && !map.has(d.email.toLowerCase())) {
+        map.set(d.email.toLowerCase(), {
+          id: d.id,
+          email: d.email,
+          name: d.name || d.email.split('@')[0],
+        });
+      }
+    });
+    return Array.from(map.values());
+  };
 
   const renderContent = () => (
     <View style={styles.chatWrapper}>
@@ -1019,19 +1109,18 @@ export default function ChatScreen() {
                   </TouchableOpacity>
                 </View>
 
-                {directChats.length === 0 ? (
+                {getCombinedConversations().length === 0 ? (
                   <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
-                    No direct chats added yet. Tap "+ Add to Chat" above!
+                    No direct chats yet. Add a friend in "People 👥" tab or tap "+ Add to Chat" above!
                   </Text>
                 ) : (
-                  directChats.map((d) => (
+                  getCombinedConversations().map((d) => (
                     <TouchableOpacity
-                      key={d.id}
-                      style={[styles.roomCard, activeRoom.id === d.id && styles.roomCardActive]}
+                      key={d.id || d.email}
+                      style={[styles.roomCard, (activeRoom.id === d.id || (activeRoom.email && activeRoom.email.toLowerCase() === d.email.toLowerCase())) && styles.roomCardActive]}
                       onPress={() => {
-                        setActiveRoom({ type: 'dm', id: d.id, name: `👤 ${d.name}` });
+                        handleStartFriendChat(d.email, d.name);
                         setIsRoomModalVisible(false);
-                        setActiveTab('chats');
                       }}
                     >
                       <Text style={styles.roomIcon}>👤</Text>

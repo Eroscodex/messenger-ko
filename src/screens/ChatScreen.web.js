@@ -528,8 +528,52 @@ export default function ChatScreenWeb() {
     setActiveReactionItem(null);
   };
 
-  // Filter out blocked users' messages
-  const visibleMessages = messages.filter((msg) => !isUserBlocked(blockedUsers, msg.userEmail));
+  // Filter out blocked users' messages and enforce strict room / privacy filtering
+  const visibleMessages = messages.filter((msg) => {
+    // 1. Blocked check
+    if (isUserBlocked(blockedUsers, msg.userEmail)) return false;
+
+    // 2. Room & Privacy Filter
+    const msgRoom = msg.room_id || msg.roomId;
+    const msgRecipient = msg.recipient_email || msg.recipientEmail;
+
+    if (activeRoom.type === 'dm') {
+      if (msgRoom === activeRoom.id) return true;
+      if (activeRoom.email) {
+        const userEmailLower = (userEmail || '').toLowerCase();
+        const activeEmailLower = (activeRoom.email || '').toLowerCase();
+        const msgSenderLower = (msg.userEmail || '').toLowerCase();
+        const msgRecipientLower = (msgRecipient || '').toLowerCase();
+
+        const isFromMeToFriend = msgSenderLower === userEmailLower && (msgRecipientLower === activeEmailLower || !msgRecipientLower);
+        const isFromFriendToMe = msgSenderLower === activeEmailLower && (msgRecipientLower === userEmailLower || !msgRecipientLower);
+
+        return isFromMeToFriend || isFromFriendToMe;
+      }
+      return false;
+    }
+
+    if (activeRoom.type === 'group') {
+      return msgRoom === activeRoom.id;
+    }
+
+    // General Lounge: Only show messages if sent by self or confirmed friends
+    if (msgRoom && msgRoom !== 'general') return false;
+    const userEmailLower = (userEmail || '').toLowerCase();
+    const msgSenderLower = (msg.userEmail || '').toLowerCase();
+
+    if (msgSenderLower === userEmailLower) return true;
+    const isFriend = friendsList.some((f) => (f.email || '').toLowerCase() === msgSenderLower);
+    return isFriend;
+  });
+
+  // Separate incoming vs outgoing friend requests for privacy
+  const incomingRequests = friendRequests.filter(
+    (req) => (req.to || '').toLowerCase() === (userEmail || '').toLowerCase()
+  );
+  const outgoingRequests = friendRequests.filter(
+    (req) => (req.from || '').toLowerCase() === (userEmail || '').toLowerCase()
+  );
 
   // Realtime Online Status Check
   const otherUsersOnline = onlineUsers.filter((u) => u !== userEmail);
@@ -673,18 +717,18 @@ export default function ChatScreenWeb() {
         </View>
       </View>
 
-      {/* Incoming Friend Requests Card */}
+      {/* Incoming Friend Requests Card (Sent to me) */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
         <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
-          📩 Pending Friend Requests ({friendRequests.length})
+          📩 Pending Friend Requests ({incomingRequests.length})
         </Text>
 
-        {friendRequests.length === 0 ? (
+        {incomingRequests.length === 0 ? (
           <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic', marginTop: 4 }]}>
-            No pending requests. Send requests above to invite friends!
+            No incoming pending requests. Send requests above to invite friends!
           </Text>
         ) : (
-          friendRequests.map((req) => (
+          incomingRequests.map((req) => (
             <View key={req.id} style={styles.requestRow}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.requestFromText, { color: theme.modalText }]}>{req.from}</Text>
@@ -710,6 +754,31 @@ export default function ChatScreenWeb() {
           ))
         )}
       </View>
+
+      {/* Outgoing Sent Friend Requests Card (Sent by me) */}
+      {outgoingRequests.length > 0 && (
+        <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+          <Text style={[styles.cardTitleText, { color: theme.modalText }]}>
+            📤 Sent Friend Requests ({outgoingRequests.length})
+          </Text>
+
+          {outgoingRequests.map((req) => (
+            <View key={req.id} style={styles.requestRow}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.requestFromText, { color: theme.modalText }]}>{req.to}</Text>
+                <Text style={[styles.requestSubtext, { color: theme.subtext }]}>Friend request sent (Waiting for response ⏳)</Text>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.actionBtn, { backgroundColor: 'rgba(229,57,53,0.15)' }]}
+                onPress={() => handleRejectFriendRequest(req.id)}
+              >
+                <Text style={{ color: '#e53935', fontSize: 12, fontWeight: '700' }}>Cancel 🗑️</Text>
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      )}
 
       {/* Friends List Card */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
@@ -780,70 +849,202 @@ export default function ChatScreenWeb() {
     </ScrollView>
   );
 
-  const renderContent = () => (
-    <View style={styles.chatWrapper}>
-      <FlatList
-        data={visibleMessages}
-        keyExtractor={(item) => item.id}
-        renderItem={renderMessage}
-        inverted
-        contentContainerStyle={styles.listContent}
-        showsVerticalScrollIndicator={false}
-        ListEmptyComponent={
-          <View style={{ transform: [{ scaleY: -1 }], alignItems: 'center', justifyContent: 'center', paddingVertical: 50, paddingHorizontal: 20 }}>
-            <Text style={{ fontSize: 44, marginBottom: 12 }}>💬</Text>
-            <Text style={{ fontSize: 16, fontWeight: '700', color: theme.dateHeaderText, textAlign: 'center' }}>
-              Wala pang ka-chat!
-            </Text>
-            <Text style={{ fontSize: 13, color: theme.dateHeaderText, opacity: 0.7, textAlign: 'center', marginTop: 4 }}>
-              Mag-add ng kaibigan sa "People 👥" tab o mag-send ng mensahe para magsimula.
-            </Text>
+  const getCombinedConversations = () => {
+    const map = new Map();
+    (friendsList || []).forEach((f) => {
+      map.set(f.email.toLowerCase(), {
+        id: f.id || `dm_${f.email}`,
+        email: f.email,
+        name: f.name || f.email.split('@')[0],
+      });
+    });
+    (directChats || []).forEach((d) => {
+      if (d.email && !map.has(d.email.toLowerCase())) {
+        map.set(d.email.toLowerCase(), {
+          id: d.id,
+          email: d.email,
+          name: d.name || d.email.split('@')[0],
+        });
+      }
+    });
+    return Array.from(map.values());
+  };
+
+  const renderChatsDashboardSidebar = () => {
+    const combinedChats = getCombinedConversations();
+    return (
+      <View style={[styles.sidebarDashboard, { backgroundColor: theme.isDark ? '#1e1a2e' : '#ffffff', borderRightColor: theme.inputBorder }]}>
+        <View style={styles.sidebarHeader}>
+          <Text style={[styles.sidebarTitle, { color: theme.modalText }]}>💬 Conversations</Text>
+        </View>
+
+        <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
+          {/* General Lounge */}
+          <TouchableOpacity
+            style={[styles.sidebarItem, activeRoom.id === 'general' && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+            onPress={() => setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' })}
+          >
+            <View style={[styles.sidebarAvatar, { backgroundColor: theme.accent }]}>
+              <Text style={{ fontSize: 16, color: '#fff' }}>💬</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.sidebarItemName, { color: theme.modalText, fontWeight: activeRoom.id === 'general' ? '700' : '600' }]}>
+                General Lounge
+              </Text>
+              <Text style={{ fontSize: 11, color: theme.subtext }}>Public Community Room</Text>
+            </View>
+          </TouchableOpacity>
+
+          <View style={styles.sidebarDivider} />
+
+          {/* Direct Messages Section */}
+          <View style={styles.sidebarSectionHeader}>
+            <Text style={[styles.sidebarSectionTitle, { color: theme.subtext }]}>👤 MY FRIENDS & KA-CHAT ({combinedChats.length})</Text>
+            <TouchableOpacity onPress={() => setActiveTab('people')}>
+              <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '700' }}>+ Add</Text>
+            </TouchableOpacity>
           </View>
-        }
-      />
 
-      <View style={[styles.composer, { backgroundColor: theme.composerBg, borderTopColor: theme.inputBorder }]}>
-        <TouchableOpacity style={styles.attachButton} onPress={pickImageWeb} disabled={uploading || sending}>
-          {uploading ? (
-            <ActivityIndicator size="small" color={theme.accent} />
+          {combinedChats.length === 0 ? (
+            <Text style={{ fontSize: 12, color: theme.subtext, fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 8 }}>
+              No ka-chat yet. Go to "People 👥" tab to add friends!
+            </Text>
           ) : (
-            <Text style={{ fontSize: 20 }}>📷</Text>
+            combinedChats.map((c) => {
+              const isSelected = activeRoom.id === c.id || (activeRoom.email && activeRoom.email.toLowerCase() === c.email.toLowerCase());
+              return (
+                <TouchableOpacity
+                  key={c.id || c.email}
+                  style={[styles.sidebarItem, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+                  onPress={() => handleStartFriendChat(c.email, c.name)}
+                >
+                  <View style={[styles.sidebarAvatar, { backgroundColor: '#0084ff' }]}>
+                    <Text style={{ fontSize: 14, color: '#fff', fontWeight: 'bold' }}>{c.name.charAt(0).toUpperCase()}</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.sidebarItemName, { color: theme.modalText, fontWeight: isSelected ? '700' : '600' }]} numberOfLines={1}>
+                      {c.name}
+                    </Text>
+                    <Text style={{ fontSize: 11, color: theme.subtext }} numberOfLines={1}>
+                      {c.email}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
           )}
-        </TouchableOpacity>
 
-        <TextInput
-          style={[
-            styles.composerInput,
-            {
-              backgroundColor: theme.inputBg,
-              borderColor: theme.inputBorder,
-              color: theme.inputText,
-            },
-          ]}
-          placeholder={`Message in ${activeRoom.name}...`}
-          placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
-          value={text}
-          onChangeText={setText}
-          multiline
-          maxLength={1000}
+          <View style={styles.sidebarDivider} />
+
+          {/* Group Chats Section */}
+          <View style={styles.sidebarSectionHeader}>
+            <Text style={[styles.sidebarSectionTitle, { color: theme.subtext }]}>👥 GROUP CHATS ({groupChats.length})</Text>
+            <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(true)}>
+              <Text style={{ color: theme.accent, fontSize: 12, fontWeight: '700' }}>+ New Group</Text>
+            </TouchableOpacity>
+          </View>
+
+          {groupChats.length === 0 ? (
+            <Text style={{ fontSize: 12, color: theme.subtext, fontStyle: 'italic', paddingHorizontal: 12, paddingVertical: 8 }}>
+              No groups created yet. Tap "+ New Group" above!
+            </Text>
+          ) : (
+            groupChats.map((g) => {
+              const isSelected = activeRoom.id === g.id;
+              return (
+                <TouchableOpacity
+                  key={g.id}
+                  style={[styles.sidebarItem, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+                  onPress={() => setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` })}
+                >
+                  <View style={[styles.sidebarAvatar, { backgroundColor: '#a855f7' }]}>
+                    <Text style={{ fontSize: 14, color: '#fff', fontWeight: 'bold' }}>👥</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.sidebarItemName, { color: theme.modalText, fontWeight: isSelected ? '700' : '600' }]} numberOfLines={1}>
+                      {g.name}
+                    </Text>
+                    <Text style={{ fontSize: 11, color: theme.subtext }} numberOfLines={1}>
+                      {g.members?.length || 0} member(s)
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </ScrollView>
+      </View>
+    );
+  };
+
+  const renderContent = () => (
+    <View style={{ flex: 1, flexDirection: 'row' }}>
+      {renderChatsDashboardSidebar()}
+
+      <View style={styles.chatWrapper}>
+        <FlatList
+          data={visibleMessages}
+          keyExtractor={(item) => item.id}
+          renderItem={renderMessage}
+          inverted
+          contentContainerStyle={styles.listContent}
+          showsVerticalScrollIndicator={false}
+          ListEmptyComponent={
+            <View style={{ transform: [{ scaleY: -1 }], alignItems: 'center', justifyContent: 'center', paddingVertical: 50, paddingHorizontal: 20 }}>
+              <Text style={{ fontSize: 44, marginBottom: 12 }}>💬</Text>
+              <Text style={{ fontSize: 16, fontWeight: '700', color: theme.dateHeaderText, textAlign: 'center' }}>
+                Wala pang ka-chat!
+              </Text>
+              <Text style={{ fontSize: 13, color: theme.dateHeaderText, opacity: 0.7, textAlign: 'center', marginTop: 4 }}>
+                Mag-add ng kaibigan sa "People 👥" tab o mag-send ng mensahe para magsimula.
+              </Text>
+            </View>
+          }
         />
 
-        {text.trim().length > 0 ? (
-          <TouchableOpacity
-            style={[styles.sendButton, { backgroundColor: theme.accent }, sending && styles.sendButtonDisabled]}
-            onPress={() => sendMessage()}
-            disabled={sending}
-          >
-            <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>➤</Text>
+        <View style={[styles.composer, { backgroundColor: theme.composerBg, borderTopColor: theme.inputBorder }]}>
+          <TouchableOpacity style={styles.attachButton} onPress={pickImageWeb} disabled={uploading || sending}>
+            {uploading ? (
+              <ActivityIndicator size="small" color={theme.accent} />
+            ) : (
+              <Text style={{ fontSize: 20 }}>📷</Text>
+            )}
           </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={[styles.quickLikeBtn, { backgroundColor: theme.inputBg }]}
-            onPress={() => sendMessage('👍')}
-          >
-            <Text style={styles.quickLikeText}>👍</Text>
-          </TouchableOpacity>
-        )}
+
+          <TextInput
+            style={[
+              styles.composerInput,
+              {
+                backgroundColor: theme.inputBg,
+                borderColor: theme.inputBorder,
+                color: theme.inputText,
+              },
+            ]}
+            placeholder={`Message in ${activeRoom.name}...`}
+            placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+            value={text}
+            onChangeText={setText}
+            multiline
+            maxLength={1000}
+          />
+
+          {text.trim().length > 0 ? (
+            <TouchableOpacity
+              style={[styles.sendButton, { backgroundColor: theme.accent }, sending && styles.sendButtonDisabled]}
+              onPress={() => sendMessage()}
+              disabled={sending}
+            >
+              <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 16 }}>➤</Text>
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.quickLikeBtn, { backgroundColor: theme.inputBg }]}
+              onPress={() => sendMessage('👍')}
+            >
+              <Text style={styles.quickLikeText}>👍</Text>
+            </TouchableOpacity>
+          )}
+        </View>
       </View>
     </View>
   );
@@ -1024,19 +1225,18 @@ export default function ChatScreenWeb() {
                   </TouchableOpacity>
                 </View>
 
-                {directChats.length === 0 ? (
+                {getCombinedConversations().length === 0 ? (
                   <Text style={[styles.sectionSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>
-                    No direct chats added yet. Tap "+ Add to Chat" above!
+                    No direct chats yet. Add a friend in "People 👥" tab or tap "+ Add to Chat" above!
                   </Text>
                 ) : (
-                  directChats.map((d) => (
+                  getCombinedConversations().map((d) => (
                     <TouchableOpacity
-                      key={d.id}
-                      style={[styles.roomCard, activeRoom.id === d.id && styles.roomCardActive]}
+                      key={d.id || d.email}
+                      style={[styles.roomCard, (activeRoom.id === d.id || (activeRoom.email && activeRoom.email.toLowerCase() === d.email.toLowerCase())) && styles.roomCardActive]}
                       onPress={() => {
-                        setActiveRoom({ type: 'dm', id: d.id, name: `👤 ${d.name}` });
+                        handleStartFriendChat(d.email, d.name);
                         setIsRoomModalVisible(false);
-                        setActiveTab('chats');
                       }}
                     >
                       <Text style={styles.roomIcon}>👤</Text>
@@ -1703,6 +1903,60 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderRadius: 12,
     backgroundColor: 'rgba(229,57,53,0.08)',
+  },
+
+  sidebarDashboard: {
+    width: 280,
+    borderRightWidth: 1,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  sidebarHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 8,
+    paddingBottom: 10,
+  },
+  sidebarTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+  },
+  sidebarSectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  sidebarSectionTitle: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+  },
+  sidebarItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 8,
+    gap: 10,
+    marginVertical: 2,
+    cursor: 'pointer',
+  },
+  sidebarAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justify: 'center',
+  },
+  sidebarItemName: {
+    fontSize: 14,
+  },
+  sidebarDivider: {
+    height: 1,
+    backgroundColor: 'rgba(150,150,150,0.15)',
+    marginVertical: 8,
   },
 
   blockSenderOptionBtn: {
