@@ -177,6 +177,8 @@ export default function LoginScreen({ navigation }) {
             <Text style={styles.label}>Email Address</Text>
             <TextInput
               ref={emailRef}
+              nativeID="login-email"
+              name="email"
               style={styles.input}
               placeholder="user@example.com"
               placeholderTextColor="#aaa"
@@ -205,6 +207,8 @@ export default function LoginScreen({ navigation }) {
             <View style={styles.passwordContainer}>
               <TextInput
                 ref={passwordRef}
+                nativeID="login-password"
+                name="password"
                 style={[styles.input, { flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 }]}
                 placeholder="••••••••"
                 placeholderTextColor="#aaa"

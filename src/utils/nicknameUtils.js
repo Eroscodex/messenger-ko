@@ -1,22 +1,23 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const NICKNAMES_KEY = '@messenger_app_nicknames_v2';
+const getAccountKey = (email = '') => email.trim().toLowerCase() || 'guest';
 
-export async function getSavedNicknames() {
+export async function getSavedNicknames(accountEmail = '') {
   try {
-    const saved = await AsyncStorage.getItem(NICKNAMES_KEY);
+    const saved = await AsyncStorage.getItem(`${NICKNAMES_KEY}:${getAccountKey(accountEmail)}`);
     return saved ? JSON.parse(saved) : {};
   } catch (e) {
     return {};
   }
 }
 
-export async function saveNickname(keyOrEmail, nickname) {
+export async function saveNickname(keyOrEmail, nickname, accountEmail = '') {
   try {
-    const current = await getSavedNicknames();
+    const current = await getSavedNicknames(accountEmail);
     const cleanKey = keyOrEmail.trim().toLowerCase();
     const updated = { ...current, [cleanKey]: nickname.trim() };
-    await AsyncStorage.setItem(NICKNAMES_KEY, JSON.stringify(updated));
+    await AsyncStorage.setItem(`${NICKNAMES_KEY}:${getAccountKey(accountEmail)}`, JSON.stringify(updated));
     return updated;
   } catch (e) {
     console.error('Error saving nickname', e);

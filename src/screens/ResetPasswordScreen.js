@@ -117,6 +117,8 @@ export default function ResetPasswordScreen({ navigation }) {
               <View style={styles.inputWrapper}>
                 <Text style={styles.label}>Registered Email</Text>
                 <TextInput
+                  nativeID="reset-email"
+                  name="email"
                   style={styles.input}
                   placeholder="user@example.com"
                   placeholderTextColor="#aaa"
@@ -148,6 +150,8 @@ export default function ResetPasswordScreen({ navigation }) {
                 <Text style={styles.label}>New Password</Text>
                 <View style={styles.passwordContainer}>
                   <TextInput
+                    nativeID="reset-password"
+                    name="new-password"
                     style={[styles.input, { flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 }]}
                     placeholder="Min. 6 characters"
                     placeholderTextColor="#aaa"

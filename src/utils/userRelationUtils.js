@@ -85,13 +85,15 @@ export const getFriendRequests = async () => {
     }
 
     // Normalize to { id, from, to, status } shape used by the UI
-    return (data || []).map((r) => ({
-      id: r.id,
-      from: r.from_email,
-      to: r.to_email,
-      status: r.status,
-      createdAt: r.created_at,
-    }));
+    return (data || [])
+      .filter((r) => r.from_email.toLowerCase() !== r.to_email.toLowerCase())
+      .map((r) => ({
+        id: r.id,
+        from: r.from_email,
+        to: r.to_email,
+        status: r.status,
+        createdAt: r.created_at,
+      }));
   } catch (e) {
     console.error('getFriendRequests exception:', e);
     return [];
@@ -102,6 +104,7 @@ export const sendFriendRequest = async (targetEmail, senderEmail = '') => {
   if (!targetEmail) return null;
   const cleanTarget = targetEmail.trim().toLowerCase();
   const cleanSender = senderEmail.trim().toLowerCase();
+  if (!cleanSender || cleanTarget === cleanSender) return null;
 
   try {
     const { data, error } = await supabase
@@ -169,14 +172,30 @@ export const getFriendsList = async () => {
       return [];
     }
 
-    return (data || []).map((f) => ({
-      id: f.id,
-      email: f.friend_email,
-      name: f.friend_name || f.friend_email.split('@')[0],
-      addedAt: f.created_at,
-    }));
+    return (data || [])
+      .filter((f) => f.friend_email.toLowerCase() !== user.email.toLowerCase())
+      .map((f) => ({
+        id: f.id,
+        email: f.friend_email,
+        name: f.friend_name || f.friend_email.split('@')[0],
+        addedAt: f.created_at,
+      }));
   } catch (e) {
     console.error('getFriendsList exception:', e);
+    return [];
+  }
+};
+
+export const getAllUsersAdmin = async () => {
+  try {
+    const { data, error } = await supabase.rpc('get_all_users_admin');
+    if (error) {
+      console.warn('getAllUsersAdmin error:', error.message);
+      return [];
+    }
+    return data || [];
+  } catch (e) {
+    console.error('getAllUsersAdmin exception:', e);
     return [];
   }
 };

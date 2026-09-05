@@ -14,6 +14,7 @@ import {
   ScrollView,
   Platform,
   SafeAreaView,
+  useWindowDimensions,
 } from 'react-native';
 import { supabase } from '../config/supabase';
 import { useVideoPlayer, VideoView } from 'expo-video';
@@ -54,6 +55,7 @@ import {
   acceptFriendRequest,
   rejectFriendRequest,
   getFriendsList,
+  getAllUsersAdmin,
 } from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
@@ -67,6 +69,8 @@ function UploadedVideo({ uri, style }) {
 }
 
 export default function ChatScreenWeb({ navigation }) {
+  const { width: viewportWidth } = useWindowDimensions();
+  const isCompactLayout = viewportWidth < 700;
   const [messages, setMessages] = useState([]);
   const [userEmail, setUserEmail] = useState('');
   const [text, setText] = useState('');
@@ -79,13 +83,15 @@ export default function ChatScreenWeb({ navigation }) {
   // Friend Requests & Contacts State
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
   const [addFriendInput, setAddFriendInput] = useState('');
 
   // Online Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
 
   // Room / Conversation State
-  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'General Lounge' });
+  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'Public Chat' });
+  const [isMobileConversationListVisible, setIsMobileConversationListVisible] = useState(true);
   const [groupChats, setGroupChats] = useState([]);
   const [directChats, setDirectChats] = useState([]);
   const [blockedUsers, setBlockedUsers] = useState([]);
@@ -127,6 +133,12 @@ export default function ChatScreenWeb({ navigation }) {
 
   const theme = THEMES[currentThemeId] || THEMES.classic;
 
+  const blurWebFocus = () => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.activeElement?.blur?.();
+    }
+  };
+
   const formatMessage = (msg) => ({
     id: String(msg.id || msg.temp_id || `msg_${Date.now()}`),
     text: msg.text || '',
@@ -158,21 +170,25 @@ export default function ChatScreenWeb({ navigation }) {
     }
 
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.email) setUserEmail(user.email);
-    });
-
-    getSavedThemeId().then((id) => {
-      setCurrentThemeId(id);
-      setTempThemeId(id);
-    });
-    getSavedCustomBg().then((bg) => {
-      setCustomBg(bg);
-      setTempCustomBg(bg);
-    });
-    getSavedNicknames().then((saved) => {
-      setNicknames(saved);
-      if (saved['karl']) setKarlNicknameInput(saved['karl']);
-      if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
+      const accountEmail = user?.email || '';
+      if (accountEmail) setUserEmail(accountEmail);
+      if (accountEmail.toLowerCase() === 'karlnicko2019@gmail.com') {
+        getAllUsersAdmin().then((users) => setAdminUsers(users));
+      }
+      getSavedThemeId(accountEmail).then((id) => {
+        setCurrentThemeId(id);
+        setTempThemeId(id);
+      });
+      getSavedCustomBg(accountEmail).then((bg) => {
+        setCustomBg(bg);
+        setTempCustomBg(bg);
+      });
+      getSavedNicknames(accountEmail).then((saved) => {
+        const profileName = user?.user_metadata?.full_name;
+        setNicknames(profileName ? { ...saved, [accountEmail.toLowerCase()]: profileName } : saved);
+        if (saved['karl']) setKarlNicknameInput(saved['karl']);
+        if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
+      });
     });
 
     getBlockedUsers().then((list) => setBlockedUsers(list));
@@ -408,14 +424,22 @@ export default function ChatScreenWeb({ navigation }) {
 
   // Friend Request Handlers
   const handleSendFriendRequest = async () => {
-    if (!addFriendInput.trim()) {
+    const target = addFriendInput.trim().toLowerCase();
+    if (!target) {
       Alert.alert('Required field', 'Please enter an email address.');
       return;
     }
-    await sendFriendRequest(addFriendInput.trim(), userEmail);
+    if (target === userEmail.trim().toLowerCase()) {
+      Alert.alert('That is your account', 'You cannot add yourself as a friend.');
+      return;
+    }
+    const request = await sendFriendRequest(target, userEmail);
+    if (!request) {
+      Alert.alert('Request Failed', 'This friend request could not be sent.');
+      return;
+    }
     const updated = await getFriendRequests();
     setFriendRequests(updated);
-    const target = addFriendInput.trim();
     setAddFriendInput('');
     Alert.alert('Request Sent! 🚀', `Friend request sent to ${target}.`);
   };
@@ -438,6 +462,7 @@ export default function ChatScreenWeb({ navigation }) {
     const updated = await getDirectChats();
     setDirectChats(updated);
     setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}`, email: newDirect.email });
+    setIsMobileConversationListVisible(false);
     setActiveTab('chats');
   };
 
@@ -465,6 +490,7 @@ export default function ChatScreenWeb({ navigation }) {
     const updated = await getDirectChats();
     setDirectChats(updated);
     setActiveRoom({ type: 'dm', id: newDirect.id, name: `👤 ${newDirect.name}`, email: newDirect.email });
+    setIsMobileConversationListVisible(false);
     setDmEmailInput('');
     setDmNameInput('');
     setIsAddDMModalVisible(false);
@@ -491,6 +517,7 @@ export default function ChatScreenWeb({ navigation }) {
     const updated = await getGroupChats();
     setGroupChats(updated);
     setActiveRoom({ type: 'group', id: newGroup.id, name: `👥 ${newGroup.name}` });
+    setIsMobileConversationListVisible(false);
     setGroupNameInput('');
     setGroupMembersInput('');
     setIsCreateGroupModalVisible(false);
@@ -500,6 +527,7 @@ export default function ChatScreenWeb({ navigation }) {
 
   // Theme Handlers
   const openThemeModal = () => {
+    blurWebFocus();
     setTempThemeId(currentThemeId);
     setTempCustomBg(customBg);
     setThemeModalVisible(true);
@@ -529,8 +557,8 @@ export default function ChatScreenWeb({ navigation }) {
   const handleSaveTheme = () => {
     setCurrentThemeId(tempThemeId);
     setCustomBg(tempCustomBg);
-    saveThemeId(tempThemeId);
-    saveCustomBg(tempCustomBg);
+    saveThemeId(tempThemeId, userEmail);
+    saveCustomBg(tempCustomBg, userEmail);
     setThemeModalVisible(false);
   };
 
@@ -544,10 +572,10 @@ export default function ChatScreenWeb({ navigation }) {
   const handleSaveNicknames = async () => {
     let updated = { ...nicknames };
     if (karlNicknameInput.trim()) {
-      updated = await saveNickname('karl', karlNicknameInput.trim());
+      updated = await saveNickname('karl', karlNicknameInput.trim(), userEmail);
     }
     if (lezilNicknameInput.trim()) {
-      updated = await saveNickname('lezil', lezilNicknameInput.trim());
+      updated = await saveNickname('lezil', lezilNicknameInput.trim(), userEmail);
     }
     setNicknames(updated);
     setNicknameModalVisible(false);
@@ -602,11 +630,11 @@ export default function ChatScreenWeb({ navigation }) {
       return msgRoom === activeRoom.id;
     }
 
-    // General Lounge: PUBLIC — show messages that have no recipient (public messages) and room_id is 'general' or null
-    // DM messages (have recipient_email) must NOT appear in General Lounge
-    if (msgRecipient) return false; // DM messages have a recipient — exclude from General Lounge
+    // Public Chat: PUBLIC — show messages that have no recipient (public messages) and room_id is 'general' or null
+    // DM messages (have recipient_email) must NOT appear in Public Chat
+    if (msgRecipient) return false; // DM messages have a recipient — exclude from Public Chat
     if (msgRoom && msgRoom !== 'general') return false; // group chat messages — exclude
-    return true; // All non-blocked, non-DM, non-group messages appear in General Lounge
+    return true; // All non-blocked, non-DM, non-group messages appear in Public Chat
   });
 
   // Separate incoming vs outgoing friend requests for privacy
@@ -739,7 +767,25 @@ export default function ChatScreenWeb({ navigation }) {
   };
 
   const renderPeopleTab = () => (
-    <ScrollView contentContainerStyle={styles.peopleTabContainer}>
+    <ScrollView contentContainerStyle={[styles.peopleTabContainer, isCompactLayout && styles.peopleTabContainerCompact]}>
+      {userEmail.toLowerCase() === 'karlnicko2019@gmail.com' && (
+        <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+          <Text style={[styles.cardTitleText, { color: theme.modalText }]}>🛡️ Admin - All Users ({adminUsers.length})</Text>
+          {adminUsers.length === 0 ? (
+            <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>No users found. Run migration_admin_users.sql in Supabase.</Text>
+          ) : (
+            adminUsers.map((adminUser) => (
+              <View key={adminUser.id} style={styles.friendRow}>
+                <View style={styles.friendAvatar}><Text style={styles.friendAvatarText}>{(adminUser.display_name || adminUser.email || 'U').charAt(0).toUpperCase()}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.friendNameText, { color: theme.modalText }]}>{adminUser.display_name}</Text>
+                  <Text style={[styles.friendEmailText, { color: theme.subtext }]}>{adminUser.email}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      )}
       {/* Send Friend Request Card */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
         <Text style={[styles.cardTitleText, { color: theme.modalText }]}>➕ Add Friend by Email</Text>
@@ -931,23 +977,26 @@ export default function ChatScreenWeb({ navigation }) {
   const renderChatsDashboardSidebar = () => {
     const combinedChats = getCombinedConversations();
     return (
-      <View style={[styles.sidebarDashboard, { backgroundColor: theme.isDark ? '#1e1a2e' : '#ffffff', borderRightColor: theme.inputBorder }]}>
+      <View style={[styles.sidebarDashboard, isCompactLayout && styles.sidebarDashboardCompact, { backgroundColor: theme.isDark ? '#1e1a2e' : '#ffffff', borderRightColor: theme.inputBorder }]}> 
         <View style={styles.sidebarHeader}>
           <Text style={[styles.sidebarTitle, { color: theme.modalText }]}>💬 Conversations</Text>
         </View>
 
         <ScrollView style={{ flex: 1 }} showsVerticalScrollIndicator={false}>
-          {/* General Lounge */}
+          {/* Public Chat */}
           <TouchableOpacity
-            style={[styles.sidebarItem, activeRoom.id === 'general' && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
-            onPress={() => setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' })}
+            style={[styles.sidebarItem, isCompactLayout && styles.sidebarItemCompact, activeRoom.id === 'general' && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+            onPress={() => {
+              setActiveRoom({ type: 'general', id: 'general', name: 'Public Chat' });
+              setIsMobileConversationListVisible(false);
+            }}
           >
             <View style={[styles.sidebarAvatar, { backgroundColor: theme.accent }]}>
               <Text style={{ fontSize: 16, color: '#fff' }}>💬</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={[styles.sidebarItemName, { color: theme.modalText, fontWeight: activeRoom.id === 'general' ? '700' : '600' }]}>
-                General Lounge
+                Public Chat
               </Text>
               <Text style={{ fontSize: 11, color: theme.subtext }}>Public Community Room</Text>
             </View>
@@ -973,7 +1022,7 @@ export default function ChatScreenWeb({ navigation }) {
               return (
                 <TouchableOpacity
                   key={c.id || c.email}
-                  style={[styles.sidebarItem, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+                  style={[styles.sidebarItem, isCompactLayout && styles.sidebarItemCompact, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
                   onPress={() => handleStartFriendChat(c.email, c.name)}
                 >
                   <View style={[styles.sidebarAvatar, { backgroundColor: '#0084ff' }]}>
@@ -1012,8 +1061,11 @@ export default function ChatScreenWeb({ navigation }) {
               return (
                 <TouchableOpacity
                   key={g.id}
-                  style={[styles.sidebarItem, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
-                  onPress={() => setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` })}
+                  style={[styles.sidebarItem, isCompactLayout && styles.sidebarItemCompact, isSelected && { backgroundColor: theme.accent + '22', borderRadius: 10 }]}
+                  onPress={() => {
+                    setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` });
+                    setIsMobileConversationListVisible(false);
+                  }}
                 >
                   <View style={[styles.sidebarAvatar, { backgroundColor: '#a855f7' }]}>
                     <Text style={{ fontSize: 14, color: '#fff', fontWeight: 'bold' }}>👥</Text>
@@ -1036,11 +1088,13 @@ export default function ChatScreenWeb({ navigation }) {
   };
 
   const renderContent = () => (
-    <View style={{ flex: 1, flexDirection: 'row' }}>
-      {renderChatsDashboardSidebar()}
+    <View style={{ flex: 1, minHeight: 0, width: '100%', flexDirection: 'row' }}>
+      {(!isCompactLayout || isMobileConversationListVisible) && renderChatsDashboardSidebar()}
 
-      <View style={styles.chatWrapper}>
+      {(!isCompactLayout || !isMobileConversationListVisible) && (
+      <View style={[styles.chatWrapper, isCompactLayout && styles.chatWrapperCompact]}>
         <FlatList
+          style={styles.messageList}
           data={visibleMessages}
           keyExtractor={(item) => item.id}
           renderItem={renderMessage}
@@ -1110,6 +1164,7 @@ export default function ChatScreenWeb({ navigation }) {
           )}
         </View>
       </View>
+      )}
     </View>
   );
 
@@ -1117,10 +1172,19 @@ export default function ChatScreenWeb({ navigation }) {
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
       <View style={[styles.container, { backgroundColor: theme.bg }]}>
         {/* Header Bar */}
-        <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
-          <TouchableOpacity style={styles.headerLeft} onPress={() => setIsRoomModalVisible(true)}>
+        <View style={[styles.header, { backgroundColor: theme.headerBg }, isCompactLayout && styles.headerCompact]}>
+          {isCompactLayout && !isMobileConversationListVisible && (
+            <TouchableOpacity
+              accessibilityLabel="Back to conversations"
+              onPress={() => setIsMobileConversationListVisible(true)}
+              style={styles.mobileBackButton}
+            >
+              <Text style={[styles.mobileBackArrow, { color: theme.headerText }]}>←</Text>
+            </TouchableOpacity>
+          )}
+            <TouchableOpacity style={styles.headerLeft} onPress={() => { blurWebFocus(); setIsRoomModalVisible(true); }}>
             <View style={styles.avatarHeader}>
-              <Text style={styles.avatarHeaderText}>⚡</Text>
+              <Text style={styles.avatarHeaderText}>{getDisplayName(userEmail, nicknames).charAt(0).toUpperCase()}</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
@@ -1138,19 +1202,19 @@ export default function ChatScreenWeb({ navigation }) {
             </View>
           </TouchableOpacity>
 
-          <View style={styles.headerRight}>
+          <View style={[styles.headerRight, isCompactLayout && styles.headerRightCompact]}>
             <TouchableOpacity
               style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
-              onPress={() => setNicknameModalVisible(true)}
+              onPress={() => { blurWebFocus(); setNicknameModalVisible(true); }}
             >
-              <Text style={[styles.themeBtnText, { color: theme.accent }]}>✏️ Names</Text>
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>{isCompactLayout ? '✏️' : '✏️ Names'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
               onPress={openThemeModal}
             >
-              <Text style={[styles.themeBtnText, { color: theme.accent }]}>🎨 Theme</Text>
+              <Text style={[styles.themeBtnText, { color: theme.accent }]}>{isCompactLayout ? '🎨' : '🎨 Theme'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -1165,13 +1229,14 @@ export default function ChatScreenWeb({ navigation }) {
               style={[styles.themeBtn, { backgroundColor: '#fff0f0' }]}
               onPress={handleLogout}
             >
-              <Text style={{ fontSize: 12, color: '#e53935', fontWeight: 'bold' }}>🚪 Exit</Text>
+              <Text style={{ fontSize: 12, color: '#e53935', fontWeight: 'bold' }}>{isCompactLayout ? '🚪' : '🚪 Exit'}</Text>
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Main Segmented Navigation Bar: Chats | People */}
-        <View style={[styles.segmentedTabBar, { backgroundColor: theme.isDark ? '#1f1b2e' : '#eef2fd' }]}>
+        {(!isCompactLayout || isMobileConversationListVisible || activeTab === 'people') && (
+        <View style={[styles.segmentedTabBar, { backgroundColor: theme.isDark ? '#1f1b2e' : '#eef2fd' }]}> 
           <TouchableOpacity
             style={[styles.tabBtn, activeTab === 'chats' && styles.tabBtnActive]}
             onPress={() => setActiveTab('chats')}
@@ -1195,6 +1260,7 @@ export default function ChatScreenWeb({ navigation }) {
             )}
           </TouchableOpacity>
         </View>
+        )}
 
         {/* Render Tab View */}
         {activeTab === 'people' ? (
@@ -1214,10 +1280,10 @@ export default function ChatScreenWeb({ navigation }) {
           transparent={true}
           onRequestClose={() => setIsRoomModalVisible(false)}
         >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}>
+          <View style={[styles.modalOverlay, isCompactLayout && styles.modalOverlayCompact]}>
+            <View style={[styles.modalContent, isCompactLayout && styles.modalContentCompact, { backgroundColor: theme.modalBg }]}> 
               <View style={styles.modalHeader}>
-                <Text style={[styles.modalTitle, { color: theme.modalText }]}>💬 Conversations & Rooms</Text>
+                <Text style={[styles.modalTitle, isCompactLayout && styles.modalTitleCompact, { color: theme.modalText }]} numberOfLines={1}>💬 Conversations & Rooms</Text>
                 <TouchableOpacity onPress={() => setIsRoomModalVisible(false)}>
                   <Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text>
                 </TouchableOpacity>
@@ -1228,14 +1294,15 @@ export default function ChatScreenWeb({ navigation }) {
                 <TouchableOpacity
                   style={[styles.roomCard, activeRoom.id === 'general' && styles.roomCardActive]}
                   onPress={() => {
-                    setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' });
+                    setActiveRoom({ type: 'general', id: 'general', name: 'Public Chat' });
+                    setIsMobileConversationListVisible(false);
                     setIsRoomModalVisible(false);
                     setActiveTab('chats');
                   }}
                 >
                   <Text style={styles.roomIcon}>💬</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>General Lounge</Text>
+                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>Public Chat</Text>
                     <Text style={[styles.roomSubtext, { color: theme.subtext }]}>Shared main community chat room</Text>
                   </View>
                 </TouchableOpacity>
@@ -1244,7 +1311,7 @@ export default function ChatScreenWeb({ navigation }) {
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👥 Group Chats</Text>
-                  <TouchableOpacity onPress={() => setIsCreateGroupModalVisible(true)}>
+                  <TouchableOpacity onPress={() => { blurWebFocus(); setIsCreateGroupModalVisible(true); }}>
                     <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ New Group</Text>
                   </TouchableOpacity>
                 </View>
@@ -1260,6 +1327,7 @@ export default function ChatScreenWeb({ navigation }) {
                       style={[styles.roomCard, activeRoom.id === g.id && styles.roomCardActive]}
                       onPress={() => {
                         setActiveRoom({ type: 'group', id: g.id, name: `👥 ${g.name}` });
+                        setIsMobileConversationListVisible(false);
                         setIsRoomModalVisible(false);
                         setActiveTab('chats');
                       }}
@@ -1277,7 +1345,7 @@ export default function ChatScreenWeb({ navigation }) {
 
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
                   <Text style={[styles.sectionHeader, { color: theme.modalText }]}>👤 Direct Messages (1-on-1)</Text>
-                  <TouchableOpacity onPress={() => setIsAddDMModalVisible(true)}>
+                  <TouchableOpacity onPress={() => { blurWebFocus(); setIsAddDMModalVisible(true); }}>
                     <Text style={{ color: '#0084ff', fontWeight: '700', fontSize: 13 }}>+ Add to Chat</Text>
                   </TouchableOpacity>
                 </View>
@@ -1310,6 +1378,7 @@ export default function ChatScreenWeb({ navigation }) {
                 <TouchableOpacity
                   style={styles.blockManagerBtn}
                   onPress={() => {
+                    blurWebFocus();
                     setIsBlockModalVisible(true);
                   }}
                 >
@@ -1688,11 +1757,13 @@ export default function ChatScreenWeb({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  safeArea: { flex: 1 },
-  container: { flex: 1 },
+  safeArea: { flex: 1, width: '100%', minWidth: 0, overflow: 'hidden' },
+  container: { flex: 1, width: '100%', minWidth: 0, overflow: 'hidden' },
   bgImage: { flex: 1 },
   bgOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.25)' },
-  chatWrapper: { flex: 1 },
+  chatWrapper: { flex: 1, minHeight: 0, minWidth: 0 },
+  chatWrapperCompact: { width: '100%', minHeight: 0 },
+  messageList: { flex: 1, minHeight: 0 },
 
   // Header Styles
   header: {
@@ -1706,6 +1777,9 @@ const styles = StyleSheet.create({
     elevation: 3,
     zIndex: 10,
   },
+  headerCompact: { paddingHorizontal: 6, paddingVertical: 6 },
+  mobileBackButton: { width: 28, height: 32, alignItems: 'center', justifyContent: 'center' },
+  mobileBackArrow: { fontSize: 24, lineHeight: 26 },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, marginRight: 4, minWidth: 0 },
   avatarHeader: {
     width: 32,
@@ -1731,6 +1805,7 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: 13, fontWeight: '700' },
   headerSubtitle: { fontSize: 10, fontWeight: '600' },
   headerRight: { flexDirection: 'row', gap: 3, alignItems: 'center', flexShrink: 0 },
+  headerRightCompact: { gap: 1 },
   themeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1787,6 +1862,7 @@ const styles = StyleSheet.create({
 
   // People & Friend Requests Tab View
   peopleTabContainer: { padding: 12, gap: 12 },
+  peopleTabContainerCompact: { padding: 8, gap: 8 },
   peopleCard: {
     borderRadius: 16,
     padding: 14,
@@ -1969,6 +2045,7 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     paddingHorizontal: 8,
   },
+  sidebarDashboardCompact: { flex: 1, width: 'auto', minWidth: 0, borderRightWidth: 0, paddingHorizontal: 8, paddingTop: 8 },
   sidebarHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2001,6 +2078,7 @@ const styles = StyleSheet.create({
     marginVertical: 2,
     cursor: 'pointer',
   },
+  sidebarItemCompact: { paddingVertical: 12, paddingHorizontal: 10, minHeight: 62 },
   sidebarAvatar: {
     width: 36,
     height: 36,
@@ -2113,6 +2191,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 16,
   },
+  modalOverlayCompact: { padding: 8 },
   modalContent: {
     width: '100%',
     maxWidth: 440,
@@ -2120,6 +2199,8 @@ const styles = StyleSheet.create({
     padding: 18,
     maxHeight: '85%',
   },
+  modalContentCompact: { width: 'auto', maxWidth: 'none', alignSelf: 'stretch', marginHorizontal: 4, padding: 12, borderRadius: 14, maxHeight: '90%' },
+  modalTitleCompact: { fontSize: 14 },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',

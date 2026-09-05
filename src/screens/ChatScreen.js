@@ -59,6 +59,7 @@ import {
   acceptFriendRequest,
   rejectFriendRequest,
   getFriendsList,
+  getAllUsersAdmin,
 } from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
@@ -84,13 +85,14 @@ export default function ChatScreen({ navigation }) {
   // Friend Requests & Contacts State
   const [friendRequests, setFriendRequests] = useState([]);
   const [friendsList, setFriendsList] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
   const [addFriendInput, setAddFriendInput] = useState('');
 
   // Realtime Presence State
   const [onlineUsers, setOnlineUsers] = useState([]);
 
   // Room / Conversation State
-  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'General Lounge' });
+  const [activeRoom, setActiveRoom] = useState({ type: 'general', id: 'general', name: 'Public Chat' });
   const [groupChats, setGroupChats] = useState([]);
   const [directChats, setDirectChats] = useState([]);
   const [blockedUsers, setBlockedUsers] = useState([]);
@@ -147,21 +149,25 @@ export default function ChatScreen({ navigation }) {
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user?.email) setUserEmail(user.email);
-    });
-
-    getSavedThemeId().then((id) => {
-      setCurrentThemeId(id);
-      setTempThemeId(id);
-    });
-    getSavedCustomBg().then((bg) => {
-      setCustomBg(bg);
-      setTempCustomBg(bg);
-    });
-    getSavedNicknames().then((saved) => {
-      setNicknames(saved);
-      if (saved['karl']) setKarlNicknameInput(saved['karl']);
-      if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
+      const accountEmail = user?.email || '';
+      if (accountEmail) setUserEmail(accountEmail);
+      if (accountEmail.toLowerCase() === 'karlnicko2019@gmail.com') {
+        getAllUsersAdmin().then((users) => setAdminUsers(users));
+      }
+      getSavedThemeId(accountEmail).then((id) => {
+        setCurrentThemeId(id);
+        setTempThemeId(id);
+      });
+      getSavedCustomBg(accountEmail).then((bg) => {
+        setCustomBg(bg);
+        setTempCustomBg(bg);
+      });
+      getSavedNicknames(accountEmail).then((saved) => {
+        const profileName = user?.user_metadata?.full_name;
+        setNicknames(profileName ? { ...saved, [accountEmail.toLowerCase()]: profileName } : saved);
+        if (saved['karl']) setKarlNicknameInput(saved['karl']);
+        if (saved['lezil']) setLezilNicknameInput(saved['lezil']);
+      });
     });
 
     getBlockedUsers().then((list) => setBlockedUsers(list));
@@ -390,14 +396,22 @@ export default function ChatScreen({ navigation }) {
 
   // Friend Request Handlers
   const handleSendFriendRequest = async () => {
-    if (!addFriendInput.trim()) {
+    const target = addFriendInput.trim().toLowerCase();
+    if (!target) {
       Alert.alert('Required field', 'Please enter an email address.');
       return;
     }
-    await sendFriendRequest(addFriendInput.trim(), userEmail);
+    if (target === userEmail.trim().toLowerCase()) {
+      Alert.alert('That is your account', 'You cannot add yourself as a friend.');
+      return;
+    }
+    const request = await sendFriendRequest(target, userEmail);
+    if (!request) {
+      Alert.alert('Request Failed', 'This friend request could not be sent.');
+      return;
+    }
     const updated = await getFriendRequests();
     setFriendRequests(updated);
-    const target = addFriendInput.trim();
     setAddFriendInput('');
     Alert.alert('Request Sent! 🚀', `Friend request sent to ${target}.`);
   };
@@ -506,8 +520,8 @@ export default function ChatScreen({ navigation }) {
   const handleSaveTheme = () => {
     setCurrentThemeId(tempThemeId);
     setCustomBg(tempCustomBg);
-    saveThemeId(tempThemeId);
-    saveCustomBg(tempCustomBg);
+    saveThemeId(tempThemeId, userEmail);
+    saveCustomBg(tempCustomBg, userEmail);
     setThemeModalVisible(false);
   };
 
@@ -521,10 +535,10 @@ export default function ChatScreen({ navigation }) {
   const handleSaveNicknames = async () => {
     let updated = { ...nicknames };
     if (karlNicknameInput.trim()) {
-      updated = await saveNickname('karl', karlNicknameInput.trim());
+      updated = await saveNickname('karl', karlNicknameInput.trim(), userEmail);
     }
     if (lezilNicknameInput.trim()) {
-      updated = await saveNickname('lezil', lezilNicknameInput.trim());
+      updated = await saveNickname('lezil', lezilNicknameInput.trim(), userEmail);
     }
     setNicknames(updated);
     setNicknameModalVisible(false);
@@ -574,7 +588,7 @@ export default function ChatScreen({ navigation }) {
       return msgRoom === activeRoom.id;
     }
 
-    // General Lounge is public: show all non-DM, non-group messages.
+    // Public Chat is public: show all non-DM, non-group messages.
     if (msgRecipient) return false;
     if (msgRoom && msgRoom !== 'general') return false;
     return true;
@@ -713,6 +727,24 @@ export default function ChatScreen({ navigation }) {
 
   const renderPeopleTab = () => (
     <ScrollView contentContainerStyle={styles.peopleTabContainer}>
+      {userEmail.toLowerCase() === 'karlnicko2019@gmail.com' && (
+        <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
+          <Text style={[styles.cardTitleText, { color: theme.modalText }]}>🛡️ Admin - All Users ({adminUsers.length})</Text>
+          {adminUsers.length === 0 ? (
+            <Text style={[styles.cardSubtext, { color: theme.subtext, fontStyle: 'italic' }]}>No users found. Run migration_admin_users.sql in Supabase.</Text>
+          ) : (
+            adminUsers.map((adminUser) => (
+              <View key={adminUser.id} style={styles.friendRow}>
+                <View style={styles.friendAvatar}><Text style={styles.friendAvatarText}>{(adminUser.display_name || adminUser.email || 'U').charAt(0).toUpperCase()}</Text></View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.friendNameText, { color: theme.modalText }]}>{adminUser.display_name}</Text>
+                  <Text style={[styles.friendEmailText, { color: theme.subtext }]}>{adminUser.email}</Text>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+      )}
       {/* Send Friend Request Card */}
       <View style={[styles.peopleCard, { backgroundColor: theme.isDark ? '#262238' : '#ffffff' }]}>
         <Text style={[styles.cardTitleText, { color: theme.modalText }]}>➕ Add Friend by Email</Text>
@@ -991,7 +1023,7 @@ export default function ChatScreen({ navigation }) {
         <View style={[styles.header, { backgroundColor: theme.headerBg }]}>
           <TouchableOpacity style={styles.headerLeft} onPress={() => setIsRoomModalVisible(true)}>
             <View style={styles.avatarHeader}>
-              <Text style={styles.avatarHeaderText}>⚡</Text>
+              <Text style={styles.avatarHeaderText}>{getDisplayName(userEmail, nicknames).charAt(0).toUpperCase()}</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
@@ -1103,14 +1135,14 @@ export default function ChatScreen({ navigation }) {
                 <TouchableOpacity
                   style={[styles.roomCard, activeRoom.id === 'general' && styles.roomCardActive]}
                   onPress={() => {
-                    setActiveRoom({ type: 'general', id: 'general', name: 'General Lounge' });
+                    setActiveRoom({ type: 'general', id: 'general', name: 'Public Chat' });
                     setIsRoomModalVisible(false);
                     setActiveTab('chats');
                   }}
                 >
                   <Text style={styles.roomIcon}>💬</Text>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>General Lounge</Text>
+                    <Text style={[styles.roomTitle, { color: theme.modalText }]}>Public Chat</Text>
                     <Text style={[styles.roomSubtext, { color: theme.subtext }]}>Shared main community chat room</Text>
                   </View>
                 </TouchableOpacity>

@@ -155,38 +155,40 @@ export const THEMES = {
 
 const THEME_KEY = '@messenger_app_theme_id';
 const BG_IMAGE_KEY = '@messenger_app_custom_bg_image';
+const getAccountKey = (email = '') => email.trim().toLowerCase() || 'guest';
 
-export async function getSavedThemeId() {
+export async function getSavedThemeId(accountEmail = '') {
   try {
-    const saved = await AsyncStorage.getItem(THEME_KEY);
+    const saved = await AsyncStorage.getItem(`${THEME_KEY}:${getAccountKey(accountEmail)}`);
     return saved && THEMES[saved] ? saved : 'classic';
   } catch (e) {
     return 'classic';
   }
 }
 
-export async function saveThemeId(themeId) {
+export async function saveThemeId(themeId, accountEmail = '') {
   try {
-    await AsyncStorage.setItem(THEME_KEY, themeId);
+    await AsyncStorage.setItem(`${THEME_KEY}:${getAccountKey(accountEmail)}`, themeId);
   } catch (e) {
     console.error('Error saving theme', e);
   }
 }
 
-export async function getSavedCustomBg() {
+export async function getSavedCustomBg(accountEmail = '') {
   try {
-    return await AsyncStorage.getItem(BG_IMAGE_KEY);
+    return await AsyncStorage.getItem(`${BG_IMAGE_KEY}:${getAccountKey(accountEmail)}`);
   } catch (e) {
     return null;
   }
 }
 
-export async function saveCustomBg(bgUri) {
+export async function saveCustomBg(bgUri, accountEmail = '') {
   try {
+    const key = `${BG_IMAGE_KEY}:${getAccountKey(accountEmail)}`;
     if (bgUri) {
-      await AsyncStorage.setItem(BG_IMAGE_KEY, bgUri);
+      await AsyncStorage.setItem(key, bgUri);
     } else {
-      await AsyncStorage.removeItem(BG_IMAGE_KEY);
+      await AsyncStorage.removeItem(key);
     }
   } catch (e) {
     console.error('Error saving custom background', e);

@@ -110,6 +110,8 @@ export default function RegisterScreen({ navigation }) {
           <View style={styles.inputWrapper}>
             <Text style={styles.label}>Full Name or Nickname</Text>
             <TextInput
+              nativeID="register-name"
+              name="name"
               style={styles.input}
               placeholder="Enter your full name"
               placeholderTextColor="#aaa"
@@ -124,6 +126,8 @@ export default function RegisterScreen({ navigation }) {
           <View style={styles.inputWrapper}>
             <Text style={styles.label}>Email Address</Text>
             <TextInput
+              nativeID="register-email"
+              name="email"
               style={styles.input}
               placeholder="user@example.com"
               placeholderTextColor="#aaa"
@@ -142,6 +146,8 @@ export default function RegisterScreen({ navigation }) {
             <Text style={styles.label}>Password</Text>
             <View style={styles.passwordContainer}>
               <TextInput
+                nativeID="register-password"
+                name="new-password"
                 style={[styles.input, { flex: 1, borderTopRightRadius: 0, borderBottomRightRadius: 0, borderRightWidth: 0 }]}
                 placeholder="Min. 6 characters"
                 placeholderTextColor="#aaa"

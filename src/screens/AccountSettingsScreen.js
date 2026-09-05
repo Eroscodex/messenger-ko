@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../config/supabase';
+import { saveNickname } from '../utils/nicknameUtils';
 
 export default function AccountSettingsScreen({ navigation }) {
   const [name, setName] = useState('');
@@ -62,6 +63,8 @@ export default function AccountSettingsScreen({ navigation }) {
       return;
     }
 
+    await saveNickname(cleanEmail, cleanName, cleanEmail);
+
     Alert.alert(
       'Account Updated',
       cleanEmail !== email ? 'Your profile was updated. Check your new email to confirm the address change.' : 'Your profile was updated successfully.'
@@ -95,6 +98,8 @@ export default function AccountSettingsScreen({ navigation }) {
   const renderPasswordInput = (value, onChangeText, placeholder, visible, setVisible) => (
     <View style={styles.passwordRow}>
       <TextInput
+        nativeID={placeholder === 'New password' ? 'account-new-password' : 'account-confirm-password'}
+        name={placeholder === 'New password' ? 'new-password' : 'confirm-password'}
         style={styles.input}
         value={value}
         onChangeText={onChangeText}
@@ -121,7 +126,7 @@ export default function AccountSettingsScreen({ navigation }) {
       <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
         <View style={styles.topBar}>
           <TouchableOpacity accessibilityLabel="Go back" onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="arrow-back" size={22} color="#182033" />
+            <Text style={styles.backArrow}>←</Text>
           </TouchableOpacity>
           <Text style={styles.title}>Account Settings</Text>
           <View style={styles.backButton} />
@@ -144,6 +149,8 @@ export default function AccountSettingsScreen({ navigation }) {
 
               <Text style={styles.label}>Name</Text>
               <TextInput
+                nativeID="account-name"
+                name="name"
                 style={styles.input}
                 value={name}
                 onChangeText={setName}
@@ -154,6 +161,8 @@ export default function AccountSettingsScreen({ navigation }) {
 
               <Text style={styles.label}>Email</Text>
               <TextInput
+                nativeID="account-email"
+                name="email"
                 style={styles.input}
                 value={email}
                 onChangeText={setEmail}
@@ -202,6 +211,7 @@ const styles = StyleSheet.create({
   container: { width: '100%', maxWidth: 680, alignSelf: 'center', padding: 20, paddingBottom: 40 },
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 },
   backButton: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
+  backArrow: { color: '#182033', fontSize: 28, lineHeight: 30, fontWeight: '400' },
   title: { color: '#182033', fontSize: 22, fontWeight: '800' },
   loader: { marginTop: 48 },
   section: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 16, shadowColor: '#172033', shadowOpacity: 0.06, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 2 },
