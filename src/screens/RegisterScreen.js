@@ -63,11 +63,20 @@ export default function RegisterScreen({ navigation }) {
     } else if (data.session) {
       Alert.alert('Account Created! 🎉', 'Welcome to Messenger-ko!');
     } else {
-      Alert.alert(
-        'Account Created! 🎉',
-        `Account created for ${cleanEmail}.\nYou can now log in!`,
-        [{ text: 'Go to Login', onPress: () => navigation.goBack() }]
-      );
+      // Try immediate auto login in case Confirm Email is OFF
+      const { data: loginData, error: loginErr } = await supabase.auth.signInWithPassword({
+        email: cleanEmail,
+        password: cleanPass,
+      });
+
+      if (loginData?.session) {
+        Alert.alert('Account Created! 🎉', 'Logged in successfully!');
+      } else {
+        Alert.alert(
+          'Account Created! ✉️',
+          `Account created for ${cleanEmail}.\n\nIf you did not receive a confirmation email, please turn OFF "Confirm email" in Supabase Dashboard (Auth -> Providers -> Email).`
+        );
+      }
     }
     setLoading(false);
   };
