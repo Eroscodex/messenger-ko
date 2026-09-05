@@ -288,40 +288,13 @@ export default function ChatScreenWeb() {
     if (!customText) setText('');
 
     try {
-      // Build payload based on the active room type
-      // NOTE: room_id requires a DB migration to be run in Supabase.
-      // Until then, we use recipient_email as the routing key for DMs.
-      const payload = {
+      const { allMessages } = await sendOrQueueMessage({
         text: textToSend,
-        user_email: userEmail || 'user@messenger.app',
-        image_url: null,
-        video_url: null,
-        recipient_email: null,
-      };
-
-      if (activeRoom.type === 'group') {
-        payload.room_id = activeRoom.id;
-      } else if (activeRoom.type === 'dm') {
-        // Set recipient so DM messages are routed correctly
-        payload.recipient_email = activeRoom.email || null;
-      }
-      // General Lounge: no recipient, no room_id — it's public
-
-      const { data, error } = await supabase.from('messages').insert([payload]).select().single();
-      if (error) {
-        // If room_id column doesn't exist (migration not run for groups), retry without it
-        if (error.message && error.message.includes('room_id')) {
-          const { room_id, ...payloadWithoutRoomId } = payload;
-          const { data: d2, error: e2 } = await supabase.from('messages').insert([payloadWithoutRoomId]).select().single();
-          if (e2) { Alert.alert('Send Error', e2.message); return; }
-          setMessages((prev) => [formatMessage(d2), ...prev]);
-          return;
-        }
-        Alert.alert('Send Error', error.message);
-        return;
-      }
-      // Message will also appear via realtime subscription
-      setMessages((prev) => [formatMessage(data), ...prev]);
+        userEmail: userEmail || 'user@messenger.app',
+        roomId: activeRoom.type === 'group' ? activeRoom.id : 'general',
+        recipientEmail: activeRoom.type === 'dm' ? activeRoom.email : null,
+      });
+      setMessages(allMessages.map(formatMessage).reverse());
     } catch (e) {
       console.error('Send error:', e);
     } finally {
@@ -1076,6 +1049,12 @@ export default function ChatScreenWeb() {
             placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
             value={text}
             onChangeText={setText}
+            onKeyPress={(event) => {
+              if (event.nativeEvent.key === 'Enter' && !event.nativeEvent.shiftKey) {
+                event.preventDefault?.();
+                sendMessage();
+              }
+            }}
             multiline
             maxLength={1000}
           />

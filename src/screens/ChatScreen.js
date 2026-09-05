@@ -278,6 +278,8 @@ export default function ChatScreen() {
       const { allMessages } = await sendOrQueueMessage({
         text: textToSend,
         userEmail: userEmail || 'user@messenger.app',
+        roomId: activeRoom.type === 'group' ? activeRoom.id : 'general',
+        recipientEmail: activeRoom.type === 'dm' ? activeRoom.email : null,
       });
       setMessages(allMessages.map(formatMessage).reverse());
     } catch (e) {
@@ -538,14 +540,10 @@ export default function ChatScreen() {
       return msgRoom === activeRoom.id;
     }
 
-    // General Lounge: Only show messages if sent by self or confirmed friends
+    // General Lounge is public: show all non-DM, non-group messages.
+    if (msgRecipient) return false;
     if (msgRoom && msgRoom !== 'general') return false;
-    const userEmailLower = (userEmail || '').toLowerCase();
-    const msgSenderLower = (msg.userEmail || '').toLowerCase();
-
-    if (msgSenderLower === userEmailLower) return true;
-    const isFriend = friendsList.some((f) => (f.email || '').toLowerCase() === msgSenderLower);
-    return isFriend;
+    return true;
   });
 
   // Separate incoming vs outgoing friend requests for privacy
@@ -899,6 +897,12 @@ export default function ChatScreen() {
           placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
           value={text}
           onChangeText={setText}
+          onKeyPress={(event) => {
+            if (event.nativeEvent.key === 'Enter' && !event.nativeEvent.shiftKey) {
+              event.preventDefault?.();
+              sendMessage();
+            }
+          }}
           multiline
           maxLength={1000}
         />

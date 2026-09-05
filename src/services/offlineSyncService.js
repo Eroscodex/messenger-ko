@@ -63,7 +63,7 @@ export async function setPendingQueue(queue) {
  * 3. Enqueues to pending queue
  * 4. Triggers background flush attempt immediately
  */
-export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 'text', userEmail }) {
+export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 'text', userEmail, roomId = 'general', recipientEmail = null }) {
   const tempId = `temp_${Date.now()}_${Math.random().toString(36).substr(2, 6)}`;
   const timestamp = new Date().toISOString();
 
@@ -74,6 +74,8 @@ export async function sendOrQueueMessage({ text, mediaUrl = null, mediaType = 't
     user_email: userEmail || 'user@messenger.app',
     image_url: mediaUrl,
     video_url: null,
+    room_id: roomId,
+    recipient_email: recipientEmail,
     created_at: timestamp,
     status: 'pending', // 'pending' | 'syncing' | 'sent'
   };
@@ -101,6 +103,13 @@ export async function flushPendingQueue(onSyncProgress) {
   if (onSyncProgress) activeSyncProgressCallback = onSyncProgress;
 
   if (isSyncing) return;
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    const pendingQueue = await getPendingQueue();
+    if (activeSyncProgressCallback) {
+      activeSyncProgressCallback({ isSyncing: false, remaining: pendingQueue.length });
+    }
+    return;
+  }
   isSyncing = true;
 
   try {
@@ -131,6 +140,8 @@ export async function flushPendingQueue(onSyncProgress) {
           user_email: item.user_email || item.sender_email || item.userEmail || 'user@messenger.app',
           image_url: item.image_url || item.media_url || null,
           video_url: item.video_url || null,
+          room_id: item.room_id || 'general',
+          recipient_email: item.recipient_email || null,
         };
 
         const { data, error } = await supabase
