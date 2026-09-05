@@ -130,7 +130,12 @@ export default function ChatScreenWeb() {
     videoUrl: msg.video_url || null,
     createdAt: new Date(msg.created_at || Date.now()),
     status: msg.status || 'sent',
+    room_id: msg.room_id || null,
+    roomId: msg.room_id || null,
+    recipient_email: msg.recipient_email || null,
+    recipientEmail: msg.recipient_email || null,
   });
+
 
   useEffect(() => {
     // Set Document Title & Official Messenger ⚡ Favicon on Web
@@ -283,17 +288,38 @@ export default function ChatScreenWeb() {
     if (!customText) setText('');
 
     try {
-      const { allMessages } = await sendOrQueueMessage({
+      // Build payload based on the active room type
+      const payload = {
         text: textToSend,
-        userEmail: userEmail || 'user@messenger.app',
-      });
-      setMessages(allMessages.map(formatMessage).reverse());
+        user_email: userEmail || 'user@messenger.app',
+        image_url: null,
+        video_url: null,
+      };
+
+      if (activeRoom.type === 'general') {
+        payload.room_id = 'general';
+      } else if (activeRoom.type === 'group') {
+        payload.room_id = activeRoom.id;
+      } else if (activeRoom.type === 'dm') {
+        payload.room_id = activeRoom.id || null;
+        payload.recipient_email = activeRoom.email || null;
+      }
+
+      const { data, error } = await supabase.from('messages').insert([payload]).select().single();
+      if (error) {
+        console.error('Send error:', error.message);
+        Alert.alert('Send Error', error.message);
+        return;
+      }
+      // Message will appear via realtime subscription; also add optimistically
+      setMessages((prev) => [formatMessage(data), ...prev]);
     } catch (e) {
       console.error('Send error:', e);
     } finally {
       setSending(false);
     }
   };
+
 
   const deleteMessage = async (id) => {
     const { error } = await supabase.from('messages').delete().eq('id', id);
@@ -558,14 +584,9 @@ export default function ChatScreenWeb() {
       return msgRoom === activeRoom.id;
     }
 
-    // General Lounge: Only show messages if sent by self or confirmed friends
+    // General Lounge: PUBLIC — show all messages from everyone (not blocked, not room-specific)
     if (msgRoom && msgRoom !== 'general') return false;
-    const userEmailLower = (userEmail || '').toLowerCase();
-    const msgSenderLower = (msg.userEmail || '').toLowerCase();
-
-    if (msgSenderLower === userEmailLower) return true;
-    const isFriend = friendsList.some((f) => (f.email || '').toLowerCase() === msgSenderLower);
-    return isFriend;
+    return true; // All non-blocked users can see General Lounge messages
   });
 
   // Separate incoming vs outgoing friend requests for privacy
@@ -850,6 +871,20 @@ export default function ChatScreenWeb() {
     </ScrollView>
   );
 
+  // Dynamic Active / Last Seen Status Helper — defined here so sidebar can use it
+  const getActiveStatusText = (email) => {
+    if (!email) {
+      return isPartnerOnline ? '🟢 Active now' : '⚪ Offline';
+    }
+    const isOnline = onlineUsers.some((u) => u.toLowerCase() === email.toLowerCase());
+    if (isOnline) return '🟢 Active now';
+    const lastMsg = messages.find((m) => (m.userEmail || '').toLowerCase() === email.toLowerCase());
+    if (lastMsg && lastMsg.createdAt) {
+      return `⚪ ${formatLastActiveTime(lastMsg.createdAt)}`;
+    }
+    return '⚪ Offline';
+  };
+
   const getCombinedConversations = () => {
     const map = new Map();
     (friendsList || []).forEach((f) => {
@@ -1049,22 +1084,6 @@ export default function ChatScreenWeb() {
       </View>
     </View>
   );
-
-  // Dynamic Active / Last Seen Status Helper
-  const getActiveStatusText = (email) => {
-    if (!email) {
-      return isPartnerOnline ? '🟢 Active now' : '⚪ Offline';
-    }
-    const isOnline = onlineUsers.some((u) => u.toLowerCase() === email.toLowerCase());
-    if (isOnline) return '🟢 Active now';
-
-    // Find latest message from this user to calculate relative active time
-    const lastMsg = messages.find((m) => (m.userEmail || '').toLowerCase() === email.toLowerCase());
-    if (lastMsg && lastMsg.createdAt) {
-      return `⚪ ${formatLastActiveTime(lastMsg.createdAt)}`;
-    }
-    return '⚪ Offline';
-  };
 
   return (
     <SafeAreaView style={[styles.safeArea, { backgroundColor: theme.headerBg }]}>
