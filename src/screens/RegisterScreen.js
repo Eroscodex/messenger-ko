@@ -47,7 +47,11 @@ export default function RegisterScreen({ navigation }) {
     });
 
     if (error) {
-      Alert.alert('Registration Failed', error.message);
+      if (error.status === 429 || error.message.toLowerCase().includes('3 seconds') || error.message.toLowerCase().includes('rate_limit')) {
+        Alert.alert('Please Wait ⏳', 'For security, please wait 3 seconds before requesting another email confirmation.');
+      } else {
+        Alert.alert('Registration Error', error.message);
+      }
     } else if (data.session) {
       Alert.alert('Account Created! 🎉', 'Welcome to Messenger-ko!');
     } else {

@@ -92,7 +92,11 @@ export default function LoginScreen({ navigation }) {
     });
 
     if (error) {
-      Alert.alert('Registration Error', error.message);
+      if (error.status === 429 || error.message.toLowerCase().includes('3 seconds') || error.message.toLowerCase().includes('rate_limit')) {
+        Alert.alert('Please Wait ⏳', 'For security, please wait 3 seconds before sending another signup request.');
+      } else {
+        Alert.alert('Registration Error', error.message);
+      }
     } else if (data.session) {
       Alert.alert('Welcome! 🎉', 'Account created and logged in successfully!');
     } else {
