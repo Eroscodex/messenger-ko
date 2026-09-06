@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import {
 } from 'react-native';
 import { supabase } from '../config/supabase';
 import { useVideoPlayer, VideoView } from 'expo-video';
+import { useFocusEffect } from '@react-navigation/native';
 import {
   THEMES,
   getSavedThemeId,
@@ -36,6 +37,11 @@ import {
   saveNickname,
   getDisplayName,
 } from '../utils/nicknameUtils';
+import {
+  getRoomKey,
+  getSavedRoomSettings,
+  saveRoomSettings,
+} from '../utils/roomSettingsUtils';
 import {
   getCachedMessages,
   setCachedMessages,
@@ -56,9 +62,15 @@ import {
   rejectFriendRequest,
   getFriendsList,
   getAllUsersAdmin,
+  warnUserAdmin,
+  penalizeUserAdmin,
+  removeUserAdmin,
+  addGroupMembers,
+  leaveGroupChat,
 } from '../utils/userRelationUtils';
 
 const QUICK_REACTIONS = ['❤️', '👍', '😂', '😮', '😢', '🔥'];
+const ROOM_ICONS = ['🙂', '💙', '🌟', '🔥', '🌿', '🎮', '👥', '🚀'];
 
 function UploadedVideo({ uri, style }) {
   const player = useVideoPlayer(uri, (videoPlayer) => {
@@ -100,6 +112,7 @@ export default function ChatScreenWeb({ navigation }) {
   const [isRoomModalVisible, setIsRoomModalVisible] = useState(false);
   const [isAddDMModalVisible, setIsAddDMModalVisible] = useState(false);
   const [isCreateGroupModalVisible, setIsCreateGroupModalVisible] = useState(false);
+  const [isManageGroupModalVisible, setIsManageGroupModalVisible] = useState(false);
   const [isBlockModalVisible, setIsBlockModalVisible] = useState(false);
 
   // Modal Inputs
@@ -107,6 +120,7 @@ export default function ChatScreenWeb({ navigation }) {
   const [dmNameInput, setDmNameInput] = useState('');
   const [groupNameInput, setGroupNameInput] = useState('');
   const [groupMembersInput, setGroupMembersInput] = useState('');
+  const [newGroupMembersInput, setNewGroupMembersInput] = useState('');
   const [blockEmailInput, setBlockEmailInput] = useState('');
 
   // Theme & Background States
@@ -120,9 +134,11 @@ export default function ChatScreenWeb({ navigation }) {
 
   // Nicknames State
   const [nicknames, setNicknames] = useState({});
+  const [roomSettingsByKey, setRoomSettingsByKey] = useState({});
   const [isNicknameModalVisible, setNicknameModalVisible] = useState(false);
   const [karlNicknameInput, setKarlNicknameInput] = useState('');
   const [lezilNicknameInput, setLezilNicknameInput] = useState('');
+  const [roomIconInput, setRoomIconInput] = useState('🙂');
 
   // Reaction Modal State (Guaranteed FRONT overlay)
   const [activeReactionItem, setActiveReactionItem] = useState(null);
@@ -131,7 +147,12 @@ export default function ChatScreenWeb({ navigation }) {
   const [selectedMediaUrl, setSelectedMediaUrl] = useState(null);
   const [reactionsMap, setReactionsMap] = useState({});
 
-  const theme = THEMES[currentThemeId] || THEMES.classic;
+  const activeRoomKey = getRoomKey(activeRoom);
+  const activeRoomSettings = roomSettingsByKey[activeRoomKey] || {};
+  const theme = THEMES[activeRoomSettings.themeId || currentThemeId] || THEMES.classic;
+  const activeCustomBg = activeRoomSettings.customBg ?? customBg;
+  const activeNickname = activeRoomSettings.nickname || getDisplayName(userEmail, nicknames);
+  const activeIcon = activeRoomSettings.icon || '🙂';
 
   const blurWebFocus = () => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -246,6 +267,22 @@ export default function ChatScreenWeb({ navigation }) {
       supabase.removeChannel(channel);
     };
   }, []);
+
+  useFocusEffect(useCallback(() => {
+    if (!userEmail) return undefined;
+    Promise.all([getSavedRoomSettings(userEmail), getSavedNicknames(userEmail)])
+      .then(([savedRooms, saved]) => {
+        setRoomSettingsByKey(savedRooms);
+        setNicknames((current) => ({ ...current, ...saved }));
+      });
+    return undefined;
+  }, [userEmail]));
+
+  useEffect(() => {
+    const saved = roomSettingsByKey[activeRoomKey];
+    setCurrentThemeId(saved?.themeId || 'classic');
+    setCustomBg(saved?.customBg || null);
+  }, [activeRoomKey, roomSettingsByKey]);
 
   useEffect(() => {
     if (!userEmail) return;
@@ -366,6 +403,23 @@ export default function ChatScreenWeb({ navigation }) {
     } catch (err) {
       Alert.alert('Error', err.message || 'Failed to clear messages');
     }
+  };
+
+  const handleAdminAction = (action, adminUser) => {
+    const actionText = action === 'remove' ? 'remove' : action === 'warn' ? 'warn' : 'penalize';
+    const confirmed = typeof window !== 'undefined' && window.confirm
+      ? window.confirm(`Apply ${actionText} to ${adminUser.email}?`)
+      : true;
+    if (!confirmed) return;
+    const handler = action === 'remove' ? removeUserAdmin : action === 'warn' ? warnUserAdmin : penalizeUserAdmin;
+    handler(adminUser.id, `Admin ${actionText}`).then((result) => {
+      if (!result) {
+        Alert.alert('Action failed', 'Run migration_admin_users.sql and check the Supabase logs.');
+        return;
+      }
+      if (action === 'remove') setAdminUsers((users) => users.filter((user) => user.id !== adminUser.id));
+      Alert.alert('Action complete', `${adminUser.email} received a ${actionText}.`);
+    });
   };
 
   const pickImageWeb = () => {
@@ -525,12 +579,57 @@ export default function ChatScreenWeb({ navigation }) {
     setActiveTab('chats');
   };
 
+  const refreshGroups = async () => {
+    const updated = await getGroupChats();
+    setGroupChats(updated);
+    return updated;
+  };
+
+  const handleAddGroupMembers = async () => {
+    const members = newGroupMembersInput.split(',').map((member) => member.trim()).filter(Boolean);
+    if (members.length === 0) {
+      Alert.alert('Required field', 'Enter at least one email address.');
+      return;
+    }
+    const addedCount = await addGroupMembers(activeRoom.id, members);
+    if (addedCount === null) {
+      Alert.alert('Group update failed', 'Only group members can add people. Check that migration_groups.sql is installed.');
+      return;
+    }
+    await refreshGroups();
+    setNewGroupMembersInput('');
+    Alert.alert('Members added', `${addedCount} new member(s) added to ${activeRoom.name}.`);
+  };
+
+  const handleLeaveGroup = async () => {
+    const confirmed = typeof window !== 'undefined' && window.confirm
+      ? window.confirm(`Leave ${activeRoom.name}?`)
+      : true;
+    if (!confirmed) return;
+    const left = await leaveGroupChat(activeRoom.id);
+    if (!left) {
+      Alert.alert('Unable to leave', 'You may already be out of this group.');
+      return;
+    }
+    await refreshGroups();
+    setActiveRoom({ type: 'general', id: 'general', name: 'Public Chat' });
+    setIsManageGroupModalVisible(false);
+    setIsMobileConversationListVisible(true);
+    Alert.alert('Group left', 'You returned to Public Chat.');
+  };
+
   // Theme Handlers
   const openThemeModal = () => {
     blurWebFocus();
-    setTempThemeId(currentThemeId);
-    setTempCustomBg(customBg);
+    setTempThemeId(activeRoomSettings.themeId || currentThemeId);
+    setTempCustomBg(activeRoomSettings.customBg ?? customBg);
     setThemeModalVisible(true);
+  };
+
+  const openNicknameModal = () => {
+    setKarlNicknameInput(activeRoomSettings.nickname || '');
+    setRoomIconInput(activeRoomSettings.icon || '🙂');
+    setNicknameModalVisible(true);
   };
 
   const pickCustomWallpaperWeb = () => {
@@ -557,27 +656,28 @@ export default function ChatScreenWeb({ navigation }) {
   const handleSaveTheme = () => {
     setCurrentThemeId(tempThemeId);
     setCustomBg(tempCustomBg);
-    saveThemeId(tempThemeId, userEmail);
-    saveCustomBg(tempCustomBg, userEmail);
+    setRoomSettingsByKey((current) => ({
+      ...current,
+      [activeRoomKey]: { ...current[activeRoomKey], themeId: tempThemeId, customBg: tempCustomBg },
+    }));
+    saveRoomSettings(userEmail, activeRoomKey, { themeId: tempThemeId, customBg: tempCustomBg });
     setThemeModalVisible(false);
   };
 
   const handleCancelTheme = () => {
-    setTempThemeId(currentThemeId);
-    setTempCustomBg(customBg);
+    setTempThemeId(activeRoomSettings.themeId || currentThemeId);
+    setTempCustomBg(activeRoomSettings.customBg ?? customBg);
     setThemeModalVisible(false);
   };
 
   // Nicknames Handlers
   const handleSaveNicknames = async () => {
-    let updated = { ...nicknames };
-    if (karlNicknameInput.trim()) {
-      updated = await saveNickname('karl', karlNicknameInput.trim(), userEmail);
-    }
-    if (lezilNicknameInput.trim()) {
-      updated = await saveNickname('lezil', lezilNicknameInput.trim(), userEmail);
-    }
-    setNicknames(updated);
+    const nickname = karlNicknameInput.trim();
+    setRoomSettingsByKey((current) => ({
+      ...current,
+      [activeRoomKey]: { ...current[activeRoomKey], nickname, icon: roomIconInput },
+    }));
+    await saveRoomSettings(userEmail, activeRoomKey, { nickname, icon: roomIconInput });
     setNicknameModalVisible(false);
   };
 
@@ -780,6 +880,11 @@ export default function ChatScreenWeb({ navigation }) {
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.friendNameText, { color: theme.modalText }]}>{adminUser.display_name}</Text>
                   <Text style={[styles.friendEmailText, { color: theme.subtext }]}>{adminUser.email}</Text>
+                </View>
+                <View style={styles.adminActions}>
+                  <TouchableOpacity style={styles.adminWarnButton} onPress={() => handleAdminAction('warn', adminUser)}><Text style={styles.adminActionText}>Warn</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.adminPenaltyButton} onPress={() => handleAdminAction('penalty', adminUser)}><Text style={styles.adminActionText}>Penalty</Text></TouchableOpacity>
+                  <TouchableOpacity style={styles.adminRemoveButton} onPress={() => handleAdminAction('remove', adminUser)}><Text style={styles.adminActionText}>Remove</Text></TouchableOpacity>
                 </View>
               </View>
             ))
@@ -1184,7 +1289,7 @@ export default function ChatScreenWeb({ navigation }) {
           )}
             <TouchableOpacity style={styles.headerLeft} onPress={() => { blurWebFocus(); setIsRoomModalVisible(true); }}>
             <View style={styles.avatarHeader}>
-              <Text style={styles.avatarHeaderText}>{getDisplayName(userEmail, nicknames).charAt(0).toUpperCase()}</Text>
+              <Text style={styles.avatarHeaderText}>{activeIcon}</Text>
               <View style={[styles.onlineDot, { backgroundColor: isPartnerOnline ? '#31a24c' : '#ccc' }]} />
             </View>
             <View style={styles.titleBox}>
@@ -1195,7 +1300,7 @@ export default function ChatScreenWeb({ navigation }) {
                 <Text style={{ color: theme.headerText, fontSize: 12 }}>▼</Text>
               </View>
               <Text style={[styles.headerSubtitle, { color: (activeRoom.type === 'dm' ? onlineUsers.some((u) => u.toLowerCase() === (activeRoom.email || '').toLowerCase()) : isPartnerOnline) ? '#31a24c' : (theme.isDark ? '#aaaaaa' : '#888888') }]}>
-                {activeRoom.type === 'dm' && activeRoom.email
+                {activeNickname} · {activeRoom.type === 'dm' && activeRoom.email
                   ? getActiveStatusText(activeRoom.email)
                   : (isPartnerOnline ? '🟢 Active now' : '⚪ Offline')}
               </Text>
@@ -1205,7 +1310,7 @@ export default function ChatScreenWeb({ navigation }) {
           <View style={[styles.headerRight, isCompactLayout && styles.headerRightCompact]}>
             <TouchableOpacity
               style={[styles.themeBtn, { backgroundColor: theme.inputBg }]}
-              onPress={() => { blurWebFocus(); setNicknameModalVisible(true); }}
+              onPress={() => { blurWebFocus(); openNicknameModal(); }}
             >
               <Text style={[styles.themeBtnText, { color: theme.accent }]}>{isCompactLayout ? '✏️' : '✏️ Names'}</Text>
             </TouchableOpacity>
@@ -1265,8 +1370,8 @@ export default function ChatScreenWeb({ navigation }) {
         {/* Render Tab View */}
         {activeTab === 'people' ? (
           renderPeopleTab()
-        ) : customBg ? (
-          <ImageBackground source={{ uri: customBg }} style={styles.bgImage} resizeMode="cover">
+        ) : activeCustomBg ? (
+          <ImageBackground source={{ uri: activeCustomBg }} style={styles.bgImage} resizeMode="cover">
             <View style={styles.bgOverlay}>{renderContent()}</View>
           </ImageBackground>
         ) : (
@@ -1339,6 +1444,18 @@ export default function ChatScreenWeb({ navigation }) {
                       </View>
                     </TouchableOpacity>
                   ))
+                )}
+
+                {activeRoom.type === 'group' && (
+                  <TouchableOpacity
+                    style={styles.manageGroupButton}
+                    onPress={() => {
+                      setIsRoomModalVisible(false);
+                      setIsManageGroupModalVisible(true);
+                    }}
+                  >
+                    <Text style={styles.manageGroupButtonText}>Manage current group</Text>
+                  </TouchableOpacity>
                 )}
 
                 <View style={styles.divider} />
@@ -1444,6 +1561,38 @@ export default function ChatScreenWeb({ navigation }) {
                   <Text style={styles.saveActionText}>Start Chat</Text>
                 </TouchableOpacity>
               </View>
+            </View>
+          </View>
+        </Modal>
+
+        {/* Manage Group Modal */}
+        <Modal
+          visible={isManageGroupModalVisible}
+          animationType="fade"
+          transparent={true}
+          onRequestClose={() => setIsManageGroupModalVisible(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={[styles.modalContent, { backgroundColor: theme.modalBg }]}> 
+              <View style={styles.modalHeader}>
+                <Text style={[styles.modalTitle, { color: theme.modalText }]}>👥 Manage {activeRoom.name}</Text>
+                <TouchableOpacity onPress={() => setIsManageGroupModalVisible(false)}><Text style={{ color: theme.modalText, fontSize: 18, fontWeight: 'bold' }}>✕</Text></TouchableOpacity>
+              </View>
+              <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Add people using comma-separated email addresses.</Text>
+              <TextInput
+                style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
+                placeholder="friend@example.com, another@example.com"
+                placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
+                value={newGroupMembersInput}
+                onChangeText={setNewGroupMembersInput}
+                autoCapitalize="none"
+              />
+              <TouchableOpacity style={styles.saveActionBtn} onPress={handleAddGroupMembers}>
+                <Text style={styles.saveActionText}>Add People</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.leaveGroupButton} onPress={handleLeaveGroup}>
+                <Text style={styles.leaveGroupButtonText}>Leave Group</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </Modal>
@@ -1698,25 +1847,25 @@ export default function ChatScreenWeb({ navigation }) {
               </View>
 
               <View style={{ paddingVertical: 12 }}>
-                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize display names for your contacts!</Text>
+                <Text style={[styles.sectionSubtext, { color: theme.subtext }]}>Customize this conversation's nickname and icon.</Text>
 
-                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Karl's Nickname:</Text>
+                <Text style={[styles.inputLabel, { color: theme.modalText }]}>Nickname in {activeRoom.name}:</Text>
                 <TextInput
                   style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="Enter Karl's nickname"
+                  placeholder="Enter your nickname"
                   placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
                   value={karlNicknameInput}
                   onChangeText={setKarlNicknameInput}
                 />
 
-                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 12 }]}>Lezil's Nickname:</Text>
-                <TextInput
-                  style={[styles.modalInput, { backgroundColor: theme.inputBg, borderColor: theme.inputBorder, color: theme.inputText }]}
-                  placeholder="Enter Lezil's nickname"
-                  placeholderTextColor={theme.isDark ? '#aaaaaa' : '#888888'}
-                  value={lezilNicknameInput}
-                  onChangeText={setLezilNicknameInput}
-                />
+                <Text style={[styles.inputLabel, { color: theme.modalText, marginTop: 12 }]}>Conversation Icon:</Text>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
+                  {ROOM_ICONS.map((icon) => (
+                    <TouchableOpacity key={icon} onPress={() => setRoomIconInput(icon)} style={{ padding: 8, borderRadius: 18, backgroundColor: roomIconInput === icon ? theme.accent : theme.inputBg, borderWidth: 1, borderColor: roomIconInput === icon ? theme.accent : theme.inputBorder }}>
+                      <Text style={{ fontSize: 20 }}>{icon}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
               </View>
 
               <View style={styles.modalFooterActions}>
@@ -1728,7 +1877,7 @@ export default function ChatScreenWeb({ navigation }) {
                 </TouchableOpacity>
 
                 <TouchableOpacity style={styles.saveActionBtn} onPress={handleSaveNicknames}>
-                  <Text style={styles.saveActionText}>Save Nicknames</Text>
+                  <Text style={styles.saveActionText}>Save Identity</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1923,6 +2072,11 @@ const styles = StyleSheet.create({
   friendAvatarText: { color: '#fff', fontWeight: '700', fontSize: 15 },
   friendNameText: { fontSize: 14, fontWeight: '700' },
   friendEmailText: { fontSize: 11 },
+  adminActions: { flexDirection: 'row', gap: 4, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  adminWarnButton: { backgroundColor: '#f59e0b', paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7 },
+  adminPenaltyButton: { backgroundColor: '#ea580c', paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7 },
+  adminRemoveButton: { backgroundColor: '#dc2626', paddingHorizontal: 7, paddingVertical: 5, borderRadius: 7 },
+  adminActionText: { color: '#fff', fontSize: 10, fontWeight: '700' },
 
   // Messages & Date Header
   listContent: { paddingHorizontal: 10, paddingVertical: 10 },
@@ -2038,6 +2192,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(229,57,53,0.08)',
   },
+  manageGroupButton: { backgroundColor: 'rgba(0,132,255,0.1)', paddingVertical: 10, borderRadius: 10, alignItems: 'center', marginBottom: 6 },
+  manageGroupButtonText: { color: '#0084ff', fontWeight: '700', fontSize: 13 },
+  leaveGroupButton: { backgroundColor: 'rgba(229,57,53,0.1)', paddingVertical: 10, borderRadius: 10, alignItems: 'center', marginTop: 10 },
+  leaveGroupButtonText: { color: '#e53935', fontWeight: '700', fontSize: 13 },
 
   sidebarDashboard: {
     width: 280,
